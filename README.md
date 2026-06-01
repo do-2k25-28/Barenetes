@@ -1,2 +1,2 @@
 # Barenetes
-Projet d'orchestrateur minimal en Rust
+Open-source minimal container orchestration project, written in Rust
