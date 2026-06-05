@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = [
+    "api-manager",
+    "scheduler",
+    "kubelet",
+    "kubectl",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2026"
+authors   = ["DO3"]
+license   = "MIT"
