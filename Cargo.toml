@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["api", "scheduler", "kubelet", "kubectl"]
+members = ["api", "scheduler", "kubelet", "kubectl","cni"]
 
 [workspace.package]
 version = "0.1.0"
