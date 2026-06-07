@@ -92,7 +92,7 @@ message GetPodNetworkResponse {
   PodNetwork network = 1;
 }
 
-//===================// PodNetwork structure //===================//
+//===================// PodNetwork structure et états //===================//
 
 // Informations reseau principales d'un pod.
 message PodNetwork {
