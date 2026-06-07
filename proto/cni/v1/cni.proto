@@ -2,3 +2,97 @@ syntax = "proto3";
 
 package cni.v1;
 
+//===================// CNI service //===================//
+
+// Service appele uniquement par le kubelet.
+// La CNI s'occupe de connecter ou de deconnecter un pod au reseau du node.
+service CniService {
+  // Cree le reseau d'un pod.
+  rpc AddPodNetwork(AddPodNetworkRequest) returns (AddPodNetworkResponse);
+
+  // Supprime le reseau d'un pod.
+  rpc DeletePodNetwork(DeletePodNetworkRequest) returns (DeletePodNetworkResponse);
+
+  // Retourne l'etat reseau connu pour un pod.
+  rpc GetPodNetwork(GetPodNetworkRequest) returns (GetPodNetworkResponse);
+}
+
+// Identifie le pod dont le kubelet parle.
+message PodRef {
+  // Identifiant unique du pod.
+  string pod_uid = 1;
+
+  // Nom lisible du pod.
+  string pod_name = 2;
+
+  // Namespace Kubernetes du pod.
+  string namespace = 3;
+}
+
+//===================// add PodNetwork //===================//
+
+message AddPodNetworkRequest {
+  // Pod a connecter au reseau.
+  PodRef pod = 1;
+
+  // Identifiant du conteneur sandbox cree par le runtime.
+  string sandbox_id = 2;
+
+  // Chemin vers le namespace reseau Linux du pod.
+  string netns_path = 3;
+}
+
+message AddPodNetworkResponse {
+  // Resultat reseau donne au pod.
+  PodNetwork network = 1;
+}
+
+//===================// delete PodNetwork //===================//
+
+message DeletePodNetworkRequest {
+  // Pod a deconnecter du reseau.
+  PodRef pod = 1;
+
+  // Identifiant du conteneur sandbox a nettoyer.
+  string sandbox_id = 2;
+}
+
+message DeletePodNetworkResponse {
+  // True si le nettoyage s'est bien passe.
+  bool success = 1;
+}
+
+//===================// get PodNetwork //===================//
+
+message GetPodNetworkRequest {
+  // Pod dont on veut connaitre l'etat reseau.
+  PodRef pod = 1;
+}
+
+message GetPodNetworkResponse {
+  // Etat reseau connu pour ce pod.
+  PodNetwork network = 1;
+}
+
+//===================// PodNetwork structure //===================//
+
+// Informations reseau principales d'un pod.
+message PodNetwork {
+  // Etat simple pour savoir si le pod est pret cote reseau.
+  NetworkState state = 1;
+
+  // Nom de l'interface dans le pod, souvent "eth0".
+  string interface_name = 2;
+
+  // Adresse IP du pod, par exemple "10.244.1.5".
+  string ip_address = 3;
+
+  // Adresse de la passerelle, par exemple "10.244.1.1".
+  string gateway = 4;
+}
+
+enum NetworkState {
+  NETWORK_STATE_UNSPECIFIED = 0;
+  NETWORK_STATE_READY = 1;
+  NETWORK_STATE_ERROR = 2;
+}
