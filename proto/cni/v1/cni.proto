@@ -13,6 +13,9 @@ service CniService {
   // Supprime le reseau d'un pod.
   rpc DeletePodNetwork(DeletePodNetworkRequest) returns (DeletePodNetworkResponse);
 
+  // Met a jour le reseau d'un pod deja connu.
+  rpc UpdatePodNetwork(UpdatePodNetworkRequest) returns (UpdatePodNetworkResponse);
+
   // Retourne l'etat reseau connu pour un pod.
   rpc GetPodNetwork(GetPodNetworkRequest) returns (GetPodNetworkResponse);
 }
@@ -60,6 +63,21 @@ message DeletePodNetworkRequest {
 message DeletePodNetworkResponse {
   // True si le nettoyage s'est bien passe.
   bool success = 1;
+}
+
+//===================// update PodNetwork //===================//
+
+message UpdatePodNetworkRequest {
+  // Pod dont le reseau doit etre modifie.
+  PodRef pod = 1;
+
+  // Nouvel etat reseau a appliquer.
+  PodNetwork network = 2;
+}
+
+message UpdatePodNetworkResponse {
+  // Etat reseau apres la mise a jour.
+  PodNetwork network = 1;
 }
 
 //===================// get PodNetwork //===================//
