@@ -4,28 +4,28 @@ package cni.v1;
 
 //===================// CNI service //===================//
 
-// Service appele uniquement par le kubelet.
-// La CNI s'occupe de connecter ou de deconnecter un pod au reseau du node.
+// Service callable only by the kubelet.
+// The CNI is responsible for connecting or disconnecting a pod from the node's network.
 service CniService {
-  // Cree le reseau d'un pod.
+  // Creates the network for a pod.
   rpc AddPodNetwork(AddPodNetworkRequest) returns (AddPodNetworkResponse);
 
-  // Supprime le reseau d'un pod.
+  // Deletes the network for a pod.
   rpc DeletePodNetwork(DeletePodNetworkRequest) returns (DeletePodNetworkResponse);
 
-  // Met a jour le reseau d'un pod deja connu.
+  // Updates the network for a pod.
   rpc UpdatePodNetwork(UpdatePodNetworkRequest) returns (UpdatePodNetworkResponse);
 
-  // Retourne l'etat reseau connu pour un pod.
+  // Returns the network state for a pod.
   rpc GetPodNetwork(GetPodNetworkRequest) returns (GetPodNetworkResponse);
 }
 
-// Identifie le pod dont le kubelet parle.
+// Identifies the pod that the kubelet is referring to.
 message PodRef {
-  // Identifiant unique du pod.
+  // Unique identifier for the pod.
   string pod_uid = 1;
 
-  // Nom lisible du pod.
+  // Readable name for the pod.
   string pod_name = 2;
 
   // Namespace Kubernetes du pod.
@@ -35,77 +35,77 @@ message PodRef {
 //===================// add PodNetwork //===================//
 
 message AddPodNetworkRequest {
-  // Pod a connecter au reseau.
+  // Pod to connect to the network.
   PodRef pod = 1;
 
-  // Identifiant du conteneur sandbox cree par le runtime.
+  // Identifier of the container sandbox created by the runtime.
   string sandbox_id = 2;
 
-  // Chemin vers le namespace reseau Linux du pod.
+  // Path to the Linux network namespace of the pod.
   string netns_path = 3;
 }
 
 message AddPodNetworkResponse {
-  // Resultat reseau donne au pod.
+  // Network result given to the pod.
   PodNetwork network = 1;
 }
 
 //===================// delete PodNetwork //===================//
 
 message DeletePodNetworkRequest {
-  // Pod a deconnecter du reseau.
+  // Pod to disconnect from the network.
   PodRef pod = 1;
 
-  // Identifiant du conteneur sandbox a nettoyer.
+  // Identifier of the container sandbox to clean up.
   string sandbox_id = 2;
 }
 
 message DeletePodNetworkResponse {
-  // True si le nettoyage s'est bien passe.
+  // True if the cleanup was successful.
   bool success = 1;
 }
 
 //===================// update PodNetwork //===================//
 
 message UpdatePodNetworkRequest {
-  // Pod dont le reseau doit etre modifie.
+  // Pod to update the network for.
   PodRef pod = 1;
 
-  // Nouvel etat reseau a appliquer.
+  // New network state to apply.
   PodNetwork network = 2;
 }
 
 message UpdatePodNetworkResponse {
-  // Etat reseau apres la mise a jour.
+  // Network state after the update.
   PodNetwork network = 1;
 }
 
 //===================// get PodNetwork //===================//
 
 message GetPodNetworkRequest {
-  // Pod dont on veut connaitre l'etat reseau.
+  // Pod for which to retrieve network state.
   PodRef pod = 1;
 }
 
 message GetPodNetworkResponse {
-  // Etat reseau connu pour ce pod.
+  // Network state for the requested pod.
   PodNetwork network = 1;
 }
 
-//===================// PodNetwork structure et états //===================//
+//===================// PodNetwork struct and states //===================//
 
 // Informations reseau principales d'un pod.
 message PodNetwork {
-  // Etat simple pour savoir si le pod est pret cote reseau.
+  // State simple for knowing if the pod is ready on the network.
   NetworkState state = 1;
 
-  // Nom de l'interface dans le pod, souvent "eth0".
+  // Name of the interface in the pod, often "eth0".
   string interface_name = 2;
 
-  // Adresse IP du pod, par exemple "10.244.1.5".
+  // IP address of the pod, for example "10.244.1.5".
   string ip_address = 3;
 
-  // Adresse de la passerelle, par exemple "10.244.1.1".
+  // Gateway address, for example "10.244.1.1".
   string gateway = 4;
 }
 
