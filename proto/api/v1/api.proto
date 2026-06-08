@@ -1,3 +1,135 @@
 syntax = "proto3";
 
 package api.v1;
+import "google/protobuf/timestamp.proto";
+
+// ─── ObjectMeta ─────────────────────────────────────────────
+
+message ObjectMeta {
+  string              name       = 1;
+  string              namespace  = 2;
+  string              uid        = 3;
+  map<string, string> labels     = 4;
+  string              created_at = 5;
+  string              deleted_at = 6;
+}
+
+// ─── Container ──────────────────────────────────────────────
+
+// What a container should run (desired state)
+message ContainerSpec {
+  string name            = 1;  // logical name, e.g. "nginx"
+  string image           = 2;  // Docker image, e.g. "nginx:1.25"
+  int32  cpu_request_m   = 3;  // CPU in millicores (1000m = 1 core)
+  int32  ram_mb_request  = 4;  // RAM in MiB
+}
+
+// What a container is actually doing (observed state)
+message ContainerStatus {
+  string name   = 1;
+  string status = 2;  // e.g. "running", "crashed", "pending"
+}
+
+// ─── Pod ────────────────────────────────────────────────────
+
+message PodSpec {
+  string                  node_id    = 1;  // filled in by Scheduler
+  repeated string         volumes    = 2;
+  repeated ContainerSpec  containers = 3;  // what to actually run
+}
+
+enum PodConditionMessage {
+  CONDITION_UNKNOWN        = 0;
+  IS_SCHEDULED             = 1;
+  INITIALIZED              = 2;
+  POD_READY_TO_START       = 3;
+  ALL_CONTAINERS_READY     = 4;
+}
+
+message PodCondition {
+  PodConditionMessage       condition_message    = 1;
+  google.protobuf.Timestamp last_transition_time = 2;
+}
+
+message PodStatus {
+  repeated ContainerStatus containers = 1;
+  repeated PodCondition    conditions = 2;
+  string                   pod_ip     = 3;
+  string                   message    = 4;  // human-readable info/error
+  int32                    cpu_m      = 5;  // actual CPU used, millicores
+  int32                    ram_mb     = 6;  // actual RAM used, MiB
+}
+
+message Pod {
+  ObjectMeta metadata = 1;
+  PodSpec    spec     = 2;
+  PodStatus  status   = 3;
+}
+
+message PodList {
+  repeated Pod pods     = 1;
+}
+
+// ─── Node ───────────────────────────────────────────────────
+
+message NodeSpec {
+  string node_ip_cidr = 1;
+  string pod_ip_cidr  = 2;
+}
+
+message ContainerImage {
+  string name = 1;
+}
+
+message NodeStatus {
+  int32                   total_cpu_m  = 1;  // total capacity, millicores
+  int32                   used_cpu_m   = 2;  // currently allocated
+  int32                   total_ram_mb = 3;
+  int32                   used_ram_mb  = 4;
+  repeated ContainerImage images       = 5;
+  repeated string         volumes      = 6;
+}
+
+message Node {
+  ObjectMeta metadata = 1;
+  NodeSpec   spec     = 2;
+  NodeStatus status   = 3;
+}
+
+message NodeList {
+  repeated Node nodes   = 1;
+}
+
+// ─── Misc ───────────────────────────────────────────────────
+
+message Empty {}
+
+// Structured error (to be returned in PodStatus.message)
+message StatusResponse {
+  int32  code   = 1;  // mirrors gRPC status codes (0=OK, 5=NOT_FOUND, 6=ALREADY_EXISTS…)
+  string reason = 2;  // human-readable, e.g. "pod 'nginx' already exists in namespace 'default'"
+}
+
+// ─── Services ───────────────────────────────────────────────
+
+service ApiServer {
+  rpc CreatePod        (Pod)        returns (Pod);
+  rpc DeletePod        (ObjectMeta) returns (Pod);
+  rpc GetPod           (ObjectMeta) returns (Pod);
+  rpc ListPods         (Empty)      returns (PodList);
+  rpc GetNode          (ObjectMeta) returns (Node);
+  rpc ListNodes        (Empty)      returns (NodeList);
+  rpc RegisterNode     (Node)       returns (Node);
+}
+
+
+service SchedulerService {
+  rpc SchedulePod (Pod) returns (Pod);  // receives pod with empty node_id, returns it filled
+}
+
+service KubeletService {
+  rpc RunPod          (Pod)        returns (Pod);    // launches containers, returns pod with status
+  rpc StopPod         (ObjectMeta) returns (Empty);
+  rpc UpdatePodStatus (Pod)        returns (Empty);
+  rpc UpdateNodeStatus(Node)       returns (Empty);  // reports cpu/ram usage
+}
