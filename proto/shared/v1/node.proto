@@ -2,16 +2,18 @@ syntax = "proto3";
 
 package shared.v1;
 
-import "ressources.proto";
+import "resources.proto";
 
 enum NodeStatus {
   READY = 0;
-  NOT_READY = 1;
+  CORDON = 1; // Cannot schedule pods
+  DRAIN = 2; // Move all pods to other nodes
+  NOT_READY = 3;
 }
 
 message Node {
   string name = 1;
   NodeStatus status = 2;
-  Ressources capacity = 3;
-  Ressources allocatable = 4;
+  Resources capacity = 3; // Total machine resources
+  Resources allocatable = 4; // Capacity - Sum limits of Pod
 }

@@ -2,7 +2,9 @@ syntax = "proto3";
 
 package shared.v1;
 
-import "ressources.proto";
+import "resources.proto";
+import "container.proto";
+
 
 enum PodStatus {
   PENDING = 0;
@@ -12,9 +14,20 @@ enum PodStatus {
   UNKNOWN = 4;
 }
 
+// Basic Pod for scheduling
 message Pod {
   string name = 1;
-  string namespace = 2;
-  PodStatus status = 3;
-  Ressources requests = 4;
+  PodStatus status = 2;
+  Resources requests = 3;
+  Resources limits = 4;
+}
+
+message PodSpec {
+  string namespace = 1;
+  repeated Container containers = 2;
+}
+
+message PodWithSpec {
+  Pod pod = 1;
+  PodSpec spec = 2;
 }
