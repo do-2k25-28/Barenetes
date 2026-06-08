@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package shared.v1;
+
+import "ressources.proto";
+
+enum PodStatus {
+  PENDING = 0;
+  RUNNING = 1;
+  SUCCEEDED = 2;
+  FAILED = 3;
+  UNKNOWN = 4;
+}
+
+message Pod {
+  string name = 1;
+  string namespace = 2;
+  PodStatus status = 3;
+  Ressources requests = 4;
+}

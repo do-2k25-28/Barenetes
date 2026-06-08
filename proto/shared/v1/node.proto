@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package shared.v1;
+
+import "ressources.proto";
+
+enum NodeStatus {
+  READY = 0;
+  NOT_READY = 1;
+}
+
+message Node {
+  string name = 1;
+  NodeStatus status = 2;
+  Ressources capacity = 3;
+  Ressources allocatable = 4;
+}
