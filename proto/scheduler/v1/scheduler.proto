@@ -1,3 +1,17 @@
 syntax = "proto3";
 
 package scheduler.v1;
+
+import "proto/shared/v1/pod.proto";
+
+message SchedulePodRequest {
+  shared.v1.Pod pod = 1;
+}
+
+message SchedulePodResponse {
+  string nodeName = 1;
+}
+
+service Scheduler {
+  rpc SchedulePod(SchedulePodRequest) returns (SchedulePodResponse);
+}
