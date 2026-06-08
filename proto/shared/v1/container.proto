@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package shared.v1;
+
+enum Protocol {
+    TCP = 0;
+    UDP = 1;
+}
+
+message Port {
+    uint32 internal = 1;
+    uint32 external = 2;
+    Protocol protocol = 3;
+}
+
+message EnvVar {
+    string name = 1;
+    string value = 2;
+}
+
+message Container {
+    string name = 1;
+    string image = 2; // OCI image reference
+    repeated Port ports = 3;
+    repeated EnvVar env = 4;
+}
