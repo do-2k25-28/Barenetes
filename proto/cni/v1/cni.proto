@@ -1,3 +1,119 @@
 syntax = "proto3";
 
 package cni.v1;
+
+//===================// CNI service //===================//
+
+// Service callable only by the kubelet.
+// The CNI is responsible for connecting or disconnecting a pod from the node's network.
+service CniService {
+  // Creates the network for a pod.
+  rpc AddPodNetwork(AddPodNetworkRequest) returns (AddPodNetworkResponse);
+
+  // Deletes the network for a pod.
+  rpc DeletePodNetwork(DeletePodNetworkRequest) returns (DeletePodNetworkResponse);
+
+  // Updates the network for a pod.
+  rpc UpdatePodNetwork(UpdatePodNetworkRequest) returns (UpdatePodNetworkResponse);
+
+  // Returns the network state for a pod.
+  rpc GetPodNetwork(GetPodNetworkRequest) returns (GetPodNetworkResponse);
+}
+
+// Identifies the pod that the kubelet is referring to.
+message PodRef {
+  // Unique identifier for the pod.
+  string pod_uid = 1;
+
+  // Readable name for the pod.
+  string pod_name = 2;
+
+  // Namespace Kubernetes du pod.
+  string namespace = 3;
+}
+
+//===================// add PodNetwork //===================//
+
+message AddPodNetworkRequest {
+  // Pod to connect to the network.
+  PodRef pod = 1;
+
+  // Identifier of the container sandbox created by the runtime.
+  string sandbox_id = 2;
+
+  // Path to the Linux network namespace of the pod.
+  string netns_path = 3;
+}
+
+message AddPodNetworkResponse {
+  // Network result given to the pod.
+  PodNetwork network = 1;
+}
+
+//===================// delete PodNetwork //===================//
+
+message DeletePodNetworkRequest {
+  // Pod to disconnect from the network.
+  PodRef pod = 1;
+
+  // Identifier of the container sandbox to clean up.
+  string sandbox_id = 2;
+
+  // Path to the Linux network namespace of the pod.
+  string netns_path = 3;
+}
+
+message DeletePodNetworkResponse {
+  // True if the cleanup was successful.
+  bool success = 1;
+}
+
+//===================// update PodNetwork //===================//
+
+message UpdatePodNetworkRequest {
+  // Pod to update the network for.
+  PodRef pod = 1;
+
+  // New network state to apply.
+  PodNetwork network = 2;
+}
+
+message UpdatePodNetworkResponse {
+  // Network state after the update.
+  PodNetwork network = 1;
+}
+
+//===================// get PodNetwork //===================//
+
+message GetPodNetworkRequest {
+  // Pod for which to retrieve network state.
+  PodRef pod = 1;
+}
+
+message GetPodNetworkResponse {
+  // Network state for the requested pod.
+  PodNetwork network = 1;
+}
+
+//===================// PodNetwork struct and states //===================//
+
+// Informations reseau principales d'un pod.
+message PodNetwork {
+  // State simple for knowing if the pod is ready on the network.
+  NetworkState state = 1;
+
+  // Name of the interface in the pod, often "eth0".
+  string interface_name = 2;
+
+  // IP address of the pod, for example "10.244.1.5".
+  string ip_address = 3;
+
+  // Gateway address, for example "10.244.1.1".
+  string gateway = 4;
+}
+
+enum NetworkState {
+  NETWORK_STATE_UNSPECIFIED = 0;
+  NETWORK_STATE_READY = 1;
+  NETWORK_STATE_ERROR = 2;
+}
