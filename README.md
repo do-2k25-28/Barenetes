@@ -135,7 +135,11 @@ Distributed under the MIT License. See [`LICENSE`](LICENSE) for details.
 ## Star History
 
 <div align="center">
-
-[![Star History Chart](https://api.star-history.com/svg?repos=do-2k25-28/Barenetes&type=Date)](https://star-history.com/#do-2k25-28/Barenetes&Date)
-
+  <a href="https://www.star-history.com/?type=date&repos=do-2k25-28%2FBarenetes">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=do-2k25-28/Barenetes&type=date&theme=dark&legend=top-left" />
+      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=do-2k25-28/Barenetes&type=date&legend=top-left" />
+      <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=do-2k25-28/Barenetes&type=date&legend=top-left" />
+    </picture>
+  </a>
 </div>
