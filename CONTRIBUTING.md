@@ -106,21 +106,20 @@ We follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 Common types:
 
-| Type | When to use |
-|---|---|
-| `feat` | New feature or capability |
-| `fix` | Bug fix |
+| Type       | When to use                                             |
+| ---------- | ------------------------------------------------------- |
+| `feat`     | New feature or capability                               |
+| `fix`      | Bug fix                                                 |
 | `refactor` | Code change that neither fixes a bug nor adds a feature |
-| `docs` | Documentation only |
-| `test` | Adding or fixing tests |
-| `chore` | Build process, tooling, dependency updates |
+| `docs`     | Documentation only                                      |
+| `test`     | Adding or fixing tests                                  |
+| `chore`    | Build process, tooling, dependency updates              |
 
 Examples:
 
 ```
 feat(scheduler): implement pod scheduling in scheduler crate
 fix(kubelet): correct gRPC timeout handling in kubelet
-proto: add NodeStatus message to kubelet.proto
 ```
 
 ---
@@ -139,6 +138,6 @@ proto: add NodeStatus message to kubelet.proto
 
 - **Format**: run `cargo fmt` before committing
 - **Lints**: code must compile with `cargo clippy -- -D warnings`
-- **Comments**: only add comments when the *why* is non-obvious : avoid restating what the code does
+- **Comments**: only add comments when the _why_ is non-obvious : avoid restating what the code does
 - **Error handling**: use `Result` and propagate errors explicitly; avoid `unwrap()` outside of tests
 - **Proto changes**: if you modify or add `.proto` files, regenerate the bindings and include them in the same PR
