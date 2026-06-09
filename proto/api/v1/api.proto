@@ -1,135 +1,163 @@
 syntax = "proto3";
 
 package api.v1;
-import "google/protobuf/timestamp.proto";
 
-// ─── ObjectMeta ─────────────────────────────────────────────
+import "proto/shared/v1/resources.proto";
+import "proto/shared/v1/container.proto";
+import "proto/shared/v1/pod.proto";
+import "proto/shared/v1/node.proto";
 
-message ObjectMeta {
-  string              name       = 1;
-  string              namespace  = 2;
-  string              uid        = 3;
-  map<string, string> labels     = 4;
-  string              created_at = 5;
-  string              deleted_at = 6;
-}
+// ─── API-internal messages ────────────────────────────────────
 
-// ─── Container ──────────────────────────────────────────────
-
-// What a container should run (desired state)
-message ContainerSpec {
-  string name            = 1;  // logical name, e.g. "nginx"
-  string image           = 2;  // Docker image, e.g. "nginx:1.25"
-  int32  cpu_request_m   = 3;  // CPU in millicores (1000m = 1 core)
-  int32  ram_mb_request  = 4;  // RAM in MiB
-}
-
-// What a container is actually doing (observed state)
+// Observed state of a single container running on a node
 message ContainerStatus {
   string name   = 1;
-  string status = 2;  // e.g. "running", "crashed", "pending"
+  string status = 2;  // "running", "crashed", "pending"
 }
 
-// ─── Pod ────────────────────────────────────────────────────
-
-message PodSpec {
-  string                  node_id    = 1;  // filled in by Scheduler
-  repeated string         volumes    = 2;
-  repeated ContainerSpec  containers = 3;  // what to actually run
+// Full pod view: spec + runtime state
+message PodDetail {
+  shared.v1.PodWithSpec    core               = 1;
+  repeated ContainerStatus container_statuses = 2;
+  string                   pod_ip             = 3;
+  string                   message            = 4;
+  shared.v1.Resources      resource_usage     = 5;
+  string                   node_id            = 6;
 }
 
-enum PodConditionMessage {
-  CONDITION_UNKNOWN        = 0;
-  IS_SCHEDULED             = 1;
-  INITIALIZED              = 2;
-  POD_READY_TO_START       = 3;
-  ALL_CONTAINERS_READY     = 4;
+// Full node view: machine info + mounted volumes
+message NodeDetail {
+  shared.v1.Node  core    = 1;
+  repeated string volumes = 2;
 }
 
-message PodCondition {
-  PodConditionMessage       condition_message    = 1;
-  google.protobuf.Timestamp last_transition_time = 2;
+// ─── kubectl → API ────────────────────────────────────────────
+
+message CreatePodRequest {
+  shared.v1.PodWithSpec pod = 1;
+}
+message CreatePodResponse {
+  PodDetail pod = 1;
 }
 
-message PodStatus {
-  repeated ContainerStatus containers = 1;
-  repeated PodCondition    conditions = 2;
-  string                   pod_ip     = 3;
-  string                   message    = 4;  // human-readable info/error
-  int32                    cpu_m      = 5;  // actual CPU used, millicores
-  int32                    ram_mb     = 6;  // actual RAM used, MiB
+message DeletePodRequest {
+  string name      = 1;
+  string namespace = 2;
+}
+message DeletePodResponse {
+  PodDetail pod = 1;  // pod state at deletion time
 }
 
-message Pod {
-  ObjectMeta metadata = 1;
-  PodSpec    spec     = 2;
-  PodStatus  status   = 3;
+message GetPodRequest {
+  string name      = 1;
+  string namespace = 2;
+}
+message GetPodResponse {
+  PodDetail pod = 1;
 }
 
-message PodList {
-  repeated Pod pods     = 1;
+message ListPodsRequest {}
+message ListPodsResponse {
+  repeated PodDetail pods = 1;
 }
 
-// ─── Node ───────────────────────────────────────────────────
-
-message NodeSpec {
-  string node_ip_cidr = 1;
-  string pod_ip_cidr  = 2;
-}
-
-message ContainerImage {
+message GetNodeRequest {
   string name = 1;
 }
-
-message NodeStatus {
-  int32                   total_cpu_m  = 1;  // total capacity, millicores
-  int32                   used_cpu_m   = 2;  // currently allocated
-  int32                   total_ram_mb = 3;
-  int32                   used_ram_mb  = 4;
-  repeated ContainerImage images       = 5;
-  repeated string         volumes      = 6;
+message GetNodeResponse {
+  NodeDetail node = 1;
 }
 
-message Node {
-  ObjectMeta metadata = 1;
-  NodeSpec   spec     = 2;
-  NodeStatus status   = 3;
+message ListNodesRequest {}
+message ListNodesResponse {
+  repeated NodeDetail nodes = 1;
 }
 
-message NodeList {
-  repeated Node nodes   = 1;
+// ─── scheduler → API ──────────────────────────────────────────
+message WatchPodsRequest {} // Scheduler subscribes to all pod events to decide what to schedule
+
+message WatchPodEvent {
+  string    event_type = 1;  // "ADDED", "MODIFIED", "DELETED", "SCHEDULED"
+  PodDetail pod        = 2;
 }
 
-// ─── Misc ───────────────────────────────────────────────────
-
-message Empty {}
-
-// Structured error (to be returned in PodStatus.message)
-message StatusResponse {
-  int32  code   = 1;  // mirrors gRPC status codes (0=OK, 5=NOT_FOUND, 6=ALREADY_EXISTS…)
-  string reason = 2;  // human-readable, e.g. "pod 'nginx' already exists in namespace 'default'"
+// ─── API → scheduler ──────────────────────────────────────────
+message SchedulePodRequest {
+  shared.v1.Pod pod = 1; 
+}
+message SchedulePodResponse {
+  string node_name = 1;
 }
 
-// ─── Services ───────────────────────────────────────────────
+// ─── kubelet → API ────────────────────────────────────────────
 
+// Kubelet registers itself at the beggining
+message RegisterNodeRequest { 
+  NodeDetail node = 1;
+}
+message RegisterNodeResponse {
+  NodeDetail node = 1; 
+}
+
+message UpdatePodStatusRequest {
+  shared.v1.PodWithSpec pod = 1;
+}
+message UpdatePodStatusResponse {}
+
+message UpdateNodeStatusRequest {
+  shared.v1.Node node = 1;
+}
+message UpdateNodeStatusResponse {}
+
+message WatchDesiredStateRequest { // Kubelet subscribes to desired state for its node
+  string node_name = 1;  
+}
+message WatchDesiredStateEvent {
+  string                event_type = 1;  // "RUN", "STOP"
+  shared.v1.PodWithSpec pod        = 2;  // pod concerned by the event
+}
+
+// ─── API → kubelet ────────────────────────────────────────────
+message RunPodRequest {
+  shared.v1.PodWithSpec pod = 1;
+}
+message RunPodResponse {
+  shared.v1.PodWithSpec pod = 1;  // pod with updated status
+}
+
+message StopPodRequest {
+  string name      = 1;
+  string namespace = 2;
+}
+message StopPodResponse {}
+
+// ─── Services ─────────────────────────────────────────────────
 service ApiServer {
-  rpc CreatePod        (Pod)        returns (Pod);
-  rpc DeletePod        (ObjectMeta) returns (Pod);
-  rpc GetPod           (ObjectMeta) returns (Pod);
-  rpc ListPods         (Empty)      returns (PodList);
-  rpc GetNode          (ObjectMeta) returns (Node);
-  rpc ListNodes        (Empty)      returns (NodeList);
-  rpc RegisterNode     (Node)       returns (Node);
-}
+  // kubectl → API
+  rpc CreatePod  (CreatePodRequest)  returns (CreatePodResponse);
+  rpc DeletePod  (DeletePodRequest)  returns (DeletePodResponse);
+  rpc GetPod     (GetPodRequest)     returns (GetPodResponse);
+  rpc ListPods   (ListPodsRequest)   returns (ListPodsResponse);
+  rpc GetNode    (GetNodeRequest)    returns (GetNodeResponse);
+  rpc ListNodes  (ListNodesRequest)  returns (ListNodesResponse);
 
+  // scheduler → API
+  rpc WatchPods  (WatchPodsRequest)  returns (stream WatchPodEvent);
+
+  // kubelet → API
+  rpc RegisterNode      (RegisterNodeRequest)      returns (RegisterNodeResponse);
+  rpc UpdatePodStatus   (UpdatePodStatusRequest)   returns (UpdatePodStatusResponse);
+  rpc UpdateNodeStatus  (UpdateNodeStatusRequest)  returns (UpdateNodeStatusResponse);
+  rpc WatchDesiredState (WatchDesiredStateRequest) returns (stream WatchDesiredStateEvent);
+}
 
 service SchedulerService {
-  rpc SchedulePod (Pod) returns (Pod);  // receives pod with empty node_id, returns it filled
+  // API → scheduler
+  rpc SchedulePod (SchedulePodRequest) returns (SchedulePodResponse);
 }
 
 service KubeletService {
-  rpc RunPod          (Pod)        returns (Pod);    // launches containers, returns pod with status
-  rpc StopPod         (ObjectMeta) returns (Empty);
-  rpc UpdatePodStatus (Pod)        returns (Empty);
-  rpc UpdateNodeStatus(Node)       returns (Empty);  // reports cpu/ram usage
+  // API → kubelet
+  rpc RunPod  (RunPodRequest)  returns (RunPodResponse);
+  rpc StopPod (StopPodRequest) returns (StopPodResponse);
 }
