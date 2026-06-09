@@ -47,7 +47,11 @@ Key design principles:
 
 ## Architecture
 
-![Architecture](./docs/architecture.svg)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/architectureOverview.dark.excalidraw.svg" />
+  <source media="(prefers-color-scheme: light)" srcset="./docs/architectureOverview.light.excalidraw.svg" />
+  <img alt="Barenetes architecture overview" src="./docs/architectureOverview.light.excalidraw.svg" />
+</picture>
 
 ---
 
@@ -55,13 +59,13 @@ Key design principles:
 
 Barenetes is a Cargo workspace composed of five crates, each mirroring a real Kubernetes component. All inter-component communication uses **gRPC / Protocol Buffers**.
 
-| Crate | Equivalent | Role |
-|---|---|---|
-| `api` | kube-apiserver | Central hub : accepts requests and coordinates state |
-| `scheduler/reconciliator` | kube-scheduler | Assigns workloads to nodes |
-| `kubelet` | kubelet | Runs on each node, manages container lifecycle |
-| `kubectl` | kubectl | CLI to interact with the API server |
-| `cni` | CNI plugin | Manages pod networking |
+| Crate                     | Equivalent     | Role                                                 |
+| ------------------------- | -------------- | ---------------------------------------------------- |
+| `api`                     | kube-apiserver | Central hub : accepts requests and coordinates state |
+| `scheduler/reconciliator` | kube-scheduler | Assigns workloads to nodes                           |
+| `kubelet`                 | kubelet        | Runs on each node, manages container lifecycle       |
+| `kubectl`                 | kubectl        | CLI to interact with the API server                  |
+| `cni`                     | CNI plugin     | Manages pod networking                               |
 
 Proto definitions live in `proto/<component>/v1/`.
 
