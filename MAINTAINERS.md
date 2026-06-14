@@ -4,7 +4,7 @@ This file lists the current maintainers of the Barenetes project.
 
 | Name            | GitHub                                             |
 | --------------- | -------------------------------------------------- |
-| Alan Merland    | [@InkedCat](https://github.com/InkedCat)           |
+| Allan Merland   | [@InkedCat](https://github.com/InkedCat)           |
 | Charley Bignon  | [@charleybignon](https://github.com/charleybignon) |
 | Charlotte Lewis | [@c-r-lewis](https://github.com/c-r-lewis)         |
 | Dimitri Martel  | [@DimMarr](https://github.com/DimMarr)             |
