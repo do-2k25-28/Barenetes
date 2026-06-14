@@ -69,16 +69,16 @@ cargo clippy -- -D warnings
 
 ```
 Barenetes/
+├── agent/          # Node agent (kubelet equivalent)
 ├── api/            # API server (kube-apiserver equivalent)
-├── scheduler/      # Scheduler / reconciliator (kube-scheduler equivalent)
-├── kubelet/        # Node agent (kubelet equivalent)
-├── kubectl/        # CLI client (kubectl equivalent)
+├── barectl/        # CLI client (kubectl equivalent)
 ├── cni/            # Network plugin (CNI equivalent)
+├── scheduler/      # Scheduler / reconciliator (kube-scheduler equivalent)
 └── proto/          # Protobuf definitions
+    ├── agent/v1/
     ├── api/v1/
+    ├── barectl/v1/
     ├── cni/v1/
-    ├── kubectl/v1/
-    ├── kubelet/v1/
     └── scheduler/v1/
 ```
 
@@ -118,8 +118,8 @@ Common types:
 Examples:
 
 ```
-feat(scheduler): implement pod scheduling in scheduler crate
-fix(kubelet): correct gRPC timeout handling in kubelet
+feat(scheduler): implement pod scheduling
+fix(agent): correct gRPC timeout handling
 ```
 
 ---

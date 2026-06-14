@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package kubelet.v1;
+package agent.v1;
 
 service Kubelet {
     // Create or update the desired state of a pod
@@ -135,4 +135,3 @@ message ResourceQuantity {
 
     uint32 gpu = 3;
 }
-

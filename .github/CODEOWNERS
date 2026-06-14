@@ -1,14 +1,14 @@
+/agent/ @InkedCat @JyVers @kilian-nagel
+/proto/agent/ @InkedCat @JyVers @kilian-nagel
+
 /api/ @c-r-lewis @beliott @nadouulh
 /proto/api/ @c-r-lewis @beliott @nadouulh
 
+/barectl/ @GoetzHugo @Izoret
+/proto/barectl/ @GoetzHugo @Izoret
+
 /cni/ @charleybignon @obitw @laflut3 @Gmateo81
 /proto/cni/ @charleybignon @obitw @laflut3 @Gmateo81
-
-/kubectl/ @GoetzHugo @Izoret
-/proto/kubectl/ @GoetzHugo @Izoret
-
-/kubelet/ @InkedCat @JyVers @kilian-nagel
-/proto/kubelet/ @InkedCat @JyVers @kilian-nagel
 
 /scheduler/ @DimMarr @RichardDorian @GhadiSaab @Catsuri33
 /proto/scheduler/ @DimMarr @RichardDorian @GhadiSaab @Catsuri33

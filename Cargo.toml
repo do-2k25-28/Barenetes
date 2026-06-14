@@ -1,9 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["api", "scheduler", "kubelet", "kubectl","cni"]
+members = ["agent", "api", "barectl", "cni", "scheduler"]
 
 [workspace.package]
 version = "0.1.0"
-edition = "2026"
-authors = ["DO3"]
+edition = "2024"
+authors = ["do-2k25-28"]
 license = "MIT"
