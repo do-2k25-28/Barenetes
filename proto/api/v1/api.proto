@@ -11,8 +11,15 @@ import "proto/shared/v1/node.proto";
 
 // Observed state of a single container running on a node
 message ContainerStatus {
-  string name   = 1;
-  string status = 2;  // "running", "crashed", "pending"
+  string name = 1;
+  State state = 2;
+
+  enum State {
+    STATE_UNSPECIFIED = 0; 
+    STATE_RUNNING     = 1;
+    STATE_CRASHED     = 2;
+    STATE_PENDING     = 3;
+  }
 }
 
 // Full pod view: spec + runtime state
