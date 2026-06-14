@@ -88,13 +88,6 @@ message WatchPodEvent {
   PodDetail pod        = 2;
 }
 
-// ─── API → scheduler ──────────────────────────────────────────
-message SchedulePodRequest {
-  shared.v1.Pod pod = 1; 
-}
-message SchedulePodResponse {
-  string node_name = 1;
-}
 
 // ─── kubelet → API ────────────────────────────────────────────
 
@@ -124,19 +117,6 @@ message WatchDesiredStateEvent {
   shared.v1.PodWithSpec pod        = 2;  // pod concerned by the event
 }
 
-// ─── API → kubelet ────────────────────────────────────────────
-message RunPodRequest {
-  shared.v1.PodWithSpec pod = 1;
-}
-message RunPodResponse {
-  shared.v1.PodWithSpec pod = 1;  // pod with updated status
-}
-
-message StopPodRequest {
-  string name      = 1;
-  string namespace = 2;
-}
-message StopPodResponse {}
 
 // ─── Services ─────────────────────────────────────────────────
 service ApiServer {
@@ -156,15 +136,4 @@ service ApiServer {
   rpc UpdatePodStatus   (UpdatePodStatusRequest)   returns (UpdatePodStatusResponse);
   rpc UpdateNodeStatus  (UpdateNodeStatusRequest)  returns (UpdateNodeStatusResponse);
   rpc WatchDesiredState (WatchDesiredStateRequest) returns (stream WatchDesiredStateEvent);
-}
-
-service SchedulerService {
-  // API → scheduler
-  rpc SchedulePod (SchedulePodRequest) returns (SchedulePodResponse);
-}
-
-service KubeletService {
-  // API → kubelet
-  rpc RunPod  (RunPodRequest)  returns (RunPodResponse);
-  rpc StopPod (StopPodRequest) returns (StopPodResponse);
 }
