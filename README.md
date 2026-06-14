@@ -61,10 +61,10 @@ Barenetes is a Cargo workspace composed of five crates, each mirroring a real Ku
 
 | Crate                     | Equivalent     | Role                                                 |
 | ------------------------- | -------------- | ---------------------------------------------------- |
+| `agent`                   | kubelet        | Runs on each node, manages container lifecycle       |
 | `api`                     | kube-apiserver | Central hub : accepts requests and coordinates state |
+| `barectl`                 | kubectl        | CLI to interact with the API server                  |
 | `scheduler/reconciliator` | kube-scheduler | Assigns workloads to nodes                           |
-| `kubelet`                 | kubelet        | Runs on each node, manages container lifecycle       |
-| `kubectl`                 | kubectl        | CLI to interact with the API server                  |
 | `cni`                     | CNI plugin     | Manages pod networking                               |
 
 Proto definitions live in `proto/<component>/v1/`.
@@ -98,10 +98,10 @@ cargo build
 Build a single component:
 
 ```bash
+cargo build -p agent
 cargo build -p api
+cargo build -p barectl
 cargo build -p scheduler
-cargo build -p kubelet
-cargo build -p kubectl
 cargo build -p cni
 ```
 

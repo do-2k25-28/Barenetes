@@ -1,5 +1,5 @@
 [package]
-name = "cni"
+name = "agent"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
