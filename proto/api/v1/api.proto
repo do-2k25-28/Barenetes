@@ -1,3 +1,149 @@
 syntax = "proto3";
 
 package api.v1;
+
+import "proto/shared/v1/resources.proto";
+import "proto/shared/v1/container.proto";
+import "proto/shared/v1/pod.proto";
+import "proto/shared/v1/node.proto";
+
+// ─── API-internal messages ────────────────────────────────────
+
+// Observed state of a single container running on a node
+message ContainerStatus {
+  string name = 1;
+  State state = 2;
+
+  enum State {
+    STATE_UNSPECIFIED = 0; 
+    STATE_RUNNING     = 1;
+    STATE_CRASHED     = 2;
+    STATE_PENDING     = 3;
+  }
+}
+
+// Full pod view: spec + runtime state
+message PodDetail {
+  shared.v1.PodWithSpec    core               = 1;
+  repeated ContainerStatus container_statuses = 2;
+  string                   pod_ip             = 3;
+  string                   message            = 4;
+  shared.v1.Resources      resource_usage     = 5;
+  string                   node_id            = 6;
+}
+
+
+// ─── kubectl → API ────────────────────────────────────────────
+
+message CreatePodRequest {
+  shared.v1.PodWithSpec pod = 1;
+}
+message CreatePodResponse {
+  PodDetail pod = 1;
+}
+
+message DeletePodRequest {
+  string name      = 1;
+  string namespace = 2;
+}
+message DeletePodResponse {
+  PodDetail pod = 1;  // pod state at deletion time
+}
+
+message GetPodRequest {
+  string name      = 1;
+  string namespace = 2;
+}
+message GetPodResponse {
+  PodDetail pod = 1;
+}
+
+message ListPodsRequest {}
+message ListPodsResponse {
+  repeated PodDetail pods = 1;
+}
+
+message GetNodeRequest {
+  string name = 1;
+}
+message GetNodeResponse {
+  shared.v1.Node node = 1;
+}
+
+message ListNodesRequest {}
+message ListNodesResponse {
+  repeated shared.v1.Node nodes = 1;
+}
+
+// ─── scheduler → API ──────────────────────────────────────────
+message WatchPodsRequest {} // Scheduler subscribes to all pod events to decide what to schedule
+
+message WatchPodEvent {
+  EventType event_type = 1;
+  PodDetail pod        = 2;
+
+  enum EventType {
+    EVENT_TYPE_UNSPECIFIED = 0;
+    EVENT_TYPE_ADDED       = 1;
+    EVENT_TYPE_MODIFIED    = 2;
+    EVENT_TYPE_DELETED     = 3;
+    EVENT_TYPE_SCHEDULED   = 4;
+  }
+}
+
+
+// ─── kubelet → API ────────────────────────────────────────────
+
+// Kubelet registers itself at the beggining
+message RegisterNodeRequest { 
+  shared.v1.Node node = 1;
+}
+message RegisterNodeResponse {
+  shared.v1.Node node = 1; 
+}
+
+message UpdatePodStatusRequest {
+  shared.v1.PodWithSpec pod = 1;
+}
+message UpdatePodStatusResponse {}
+
+message UpdateNodeStatusRequest {
+  shared.v1.Node node = 1;
+}
+message UpdateNodeStatusResponse {}
+
+message WatchDesiredStateRequest { // Kubelet subscribes to desired state for its node
+  string node_name = 1;  
+}
+
+message WatchDesiredStateEvent {
+  Action    action = 1;
+  shared.v1.PodWithSpec pod    = 2;  // pod concerned by the event
+
+  enum Action {
+    ACTION_UNSPECIFIED = 0;
+    ACTION_RUN         = 1;
+    ACTION_STOP        = 2;
+  }
+}
+
+
+// ─── Services ─────────────────────────────────────────────────
+service ApiServer {
+  // kubectl → API
+  rpc CreatePod  (CreatePodRequest)  returns (CreatePodResponse);
+  rpc DeletePod  (DeletePodRequest)  returns (DeletePodResponse);
+  rpc GetPod     (GetPodRequest)     returns (GetPodResponse);
+  rpc ListPods   (ListPodsRequest)   returns (ListPodsResponse);
+  rpc GetNode    (GetNodeRequest)    returns (GetNodeResponse);
+  rpc ListNodes  (ListNodesRequest)  returns (ListNodesResponse);
+
+  // scheduler → API
+  rpc WatchPods  (WatchPodsRequest)  returns (stream WatchPodEvent);
+
+  // kubelet → API
+  rpc RegisterNode      (RegisterNodeRequest)      returns (RegisterNodeResponse);
+  rpc UpdatePodStatus   (UpdatePodStatusRequest)   returns (UpdatePodStatusResponse);
+  rpc UpdateNodeStatus  (UpdateNodeStatusRequest)  returns (UpdateNodeStatusResponse);
+  rpc WatchDesiredState (WatchDesiredStateRequest) returns (stream WatchDesiredStateEvent);
+}
