@@ -32,11 +32,6 @@ message PodDetail {
   string                   node_id            = 6;
 }
 
-// Full node view: machine info + mounted volumes
-message NodeDetail {
-  shared.v1.Node  core    = 1;
-  repeated string volumes = 2;
-}
 
 // ─── kubectl → API ────────────────────────────────────────────
 
@@ -72,12 +67,12 @@ message GetNodeRequest {
   string name = 1;
 }
 message GetNodeResponse {
-  NodeDetail node = 1;
+  shared.v1.Node node = 1;
 }
 
 message ListNodesRequest {}
 message ListNodesResponse {
-  repeated NodeDetail nodes = 1;
+  repeated shared.v1.Node nodes = 1;
 }
 
 // ─── scheduler → API ──────────────────────────────────────────
@@ -101,10 +96,10 @@ message WatchPodEvent {
 
 // Kubelet registers itself at the beggining
 message RegisterNodeRequest { 
-  NodeDetail node = 1;
+  shared.v1.Node node = 1;
 }
 message RegisterNodeResponse {
-  NodeDetail node = 1; 
+  shared.v1.Node node = 1; 
 }
 
 message UpdatePodStatusRequest {
