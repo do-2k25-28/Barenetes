@@ -12,14 +12,7 @@ import "shared/v1/node.proto";
 // Observed state of a single container running on a node
 message ContainerStatus {
   string name = 1;
-  State state = 2;
-
-  enum State {
-    STATE_UNSPECIFIED = 0; 
-    STATE_RUNNING     = 1;
-    STATE_CRASHED     = 2;
-    STATE_PENDING     = 3;
-  }
+  shared.v1.State state = 2;
 }
 
 // Full pod view: spec + runtime state
@@ -79,16 +72,8 @@ message ListNodesResponse {
 message WatchPodsRequest {} // Scheduler subscribes to all pod events to decide what to schedule
 
 message WatchPodEvent {
-  EventType event_type = 1;
-  PodDetail pod        = 2;
-
-  enum EventType {
-    EVENT_TYPE_UNSPECIFIED = 0;
-    EVENT_TYPE_ADDED       = 1;
-    EVENT_TYPE_MODIFIED    = 2;
-    EVENT_TYPE_DELETED     = 3;
-    EVENT_TYPE_SCHEDULED   = 4;
-  }
+  shared.v1.EventType event_type = 1;
+  PodDetail pod                  = 2;
 }
 
 
