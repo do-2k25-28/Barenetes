@@ -1,4 +1,4 @@
-use tonic::{transport::Server, Request, Response, Status};
+use tonic::{Request, Response, Status, transport::Server};
 
 use proto::scheduler::v1::scheduler_server::{Scheduler, SchedulerServer};
 use proto::scheduler::v1::{SchedulePodRequest, SchedulePodResponse};
