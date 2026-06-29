@@ -2,6 +2,19 @@ use proto::scheduler::v1::{SchedulePodRequest, SchedulePodResponse, scheduler_se
 use proto::shared::v1::Resources;
 use tonic::{Request, Response, Status};
 
+/// Calculate the general usage of the given node.
+/// Does it by averaging the cpu and memory usage.
+///
+/// Ex: 66% cpu usage with 33% memory usage ≈ 50% general usage
+fn calculate_general_usage(node: &Node) -> f32 {
+    let cpu = (node.capacity.cpu as f32 - node.allocatable.cpu as f32) / node.capacity.cpu as f32;
+
+    let memory = (node.capacity.memory as f32 - node.allocatable.memory as f32)
+        / node.capacity.memory as f32;
+
+    (cpu + memory) / 2.0
+}
+
 // Temporary redefinition of what's in shared/v1/node.proto
 // because it's not compiled by tonic as it's not currently used.
 
@@ -69,16 +82,6 @@ impl Scheduler for BasicScheduler {
 
         // Now that we have a list of candidates, we determine the node doing
         // the less amount of work by doing getting min( (ramUsage% + cpuUsage%)/2 )
-
-        fn calculate_general_usage(node: &Node) -> f32 {
-            let cpu =
-                (node.capacity.cpu as f32 - node.allocatable.cpu as f32) / node.capacity.cpu as f32;
-
-            let memory = (node.capacity.memory as f32 - node.allocatable.memory as f32)
-                / node.capacity.memory as f32;
-
-            (cpu + memory) / 2.0
-        }
 
         let mut elected = candidates
             .first()
@@ -166,5 +169,65 @@ impl Default for BasicScheduler {
         ];
 
         BasicScheduler { nodes }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn get_node(capacity: Resources, allocatable: Resources) -> Node {
+        Node {
+            name: String::from(""),
+            status: NodeStatus::Ready,
+            capacity,
+            allocatable,
+        }
+    }
+
+    #[test]
+    fn test_calculate_general_usage_0() {
+        let node = get_node(
+            Resources {
+                cpu: 1000,
+                memory: 1000,
+            },
+            Resources {
+                cpu: 1000,
+                memory: 1000,
+            },
+        );
+
+        assert_eq!(calculate_general_usage(&node), 0.0);
+    }
+
+    #[test]
+    fn test_calculate_general_usage_50() {
+        let node = get_node(
+            Resources {
+                cpu: 1000,
+                memory: 1000,
+            },
+            Resources {
+                cpu: 500,
+                memory: 500,
+            },
+        );
+        // Half the CPU is used and half the memory is used
+        // therefore general usage should be 0.5 (50%)
+        assert_eq!(calculate_general_usage(&node), 0.5);
+    }
+
+    #[test]
+    fn test_calculate_general_usage_100() {
+        let node = get_node(
+            Resources {
+                cpu: 1000,
+                memory: 1000,
+            },
+            Resources { cpu: 0, memory: 0 },
+        );
+
+        assert_eq!(calculate_general_usage(&node), 1.0);
     }
 }
