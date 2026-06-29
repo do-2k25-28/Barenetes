@@ -1,8 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
 
@@ -21,16 +19,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install protoc
-        run: sudo apt-get update -q && sudo apt-get install -y protobuf-compiler
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@nightly
+      - uses: arduino/setup-protoc@v3
         with:
-          components: rustfmt, clippy
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Cache
-        uses: Swatinem/rust-cache@v2
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+          rustflags: ""
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -44,14 +41,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install protoc
-        run: sudo apt-get update -q && sudo apt-get install -y protobuf-compiler
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@nightly
-
-      - name: Cache
-        uses: Swatinem/rust-cache@v2
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          rustflags: ""
 
       - name: Test
         run: cargo test --workspace --locked
