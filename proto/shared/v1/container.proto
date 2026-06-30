@@ -27,10 +27,10 @@ message Container {
 
 // Observed state of a single container running on a node
 enum State {
-    UNKNOWN     = 0; 
-    RUNNING     = 1;
+    UNSET     = 0; 
+    ACTIVE     = 1;
     CRASHED     = 2;
-    PENDING     = 3;
+    WAITING     = 3;
 }
 
 enum EventType {
