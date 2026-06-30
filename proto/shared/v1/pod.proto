@@ -31,3 +31,13 @@ message PodWithSpec {
   Pod pod = 1;
   PodSpec spec = 2;
 }
+
+// Full pod view: spec + runtime state
+message PodDetail {
+  shared.v1.PodWithSpec    core               = 1;
+  repeated ContainerStatus container_statuses = 2;
+  string                   pod_ip             = 3;
+  string                   message            = 4;
+  shared.v1.Resources      resource_usage     = 5;
+  string                   node_id            = 6;
+}
