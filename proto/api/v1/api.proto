@@ -7,32 +7,13 @@ import "shared/v1/container.proto";
 import "shared/v1/pod.proto";
 import "shared/v1/node.proto";
 
-// ─── API-internal messages ────────────────────────────────────
-
-// Observed state of a single container running on a node
-message ContainerStatus {
-  string name = 1;
-  shared.v1.State state = 2;
-}
-
-// Full pod view: spec + runtime state
-message PodDetail {
-  shared.v1.PodWithSpec    core               = 1;
-  repeated ContainerStatus container_statuses = 2;
-  string                   pod_ip             = 3;
-  string                   message            = 4;
-  shared.v1.Resources      resource_usage     = 5;
-  string                   node_id            = 6;
-}
-
-
 // ─── CLI → API ────────────────────────────────────────────
 
 message CreatePodRequest {
   shared.v1.PodWithSpec pod = 1;
 }
 message CreatePodResponse {
-  PodDetail pod = 1;
+  shared.v1.PodDetail pod = 1;
 }
 
 message DeletePodRequest {
@@ -40,7 +21,7 @@ message DeletePodRequest {
   string namespace = 2;
 }
 message DeletePodResponse {
-  PodDetail pod = 1;  // pod state at deletion time
+  string name = 1;
 }
 
 message GetPodRequest {
@@ -48,12 +29,12 @@ message GetPodRequest {
   string namespace = 2;
 }
 message GetPodResponse {
-  PodDetail pod = 1;
+  shared.v1.PodDetail pod = 1;
 }
 
 message ListPodsRequest {}
 message ListPodsResponse {
-  repeated PodDetail pods = 1;
+  repeated shared.v1.PodDetail pods = 1;
 }
 
 message GetNodeRequest {
@@ -73,7 +54,7 @@ message WatchPodsRequest {} // Scheduler subscribes to all pod events to decide 
 
 message WatchPodEvent {
   shared.v1.EventType event_type = 1;
-  PodDetail pod                  = 2;
+  shared.v1.PodDetail pod                  = 2;
 }
 
 
@@ -98,9 +79,8 @@ message WatchDesiredStateEvent {
   shared.v1.PodWithSpec pod    = 2;  // pod concerned by the event
 
   enum Action {
-    ACTION_UNSPECIFIED = 0;
-    ACTION_RUN         = 1;
-    ACTION_STOP        = 2;
+    RUN         = 0;
+    STOP        = 1;
   }
 }
 
