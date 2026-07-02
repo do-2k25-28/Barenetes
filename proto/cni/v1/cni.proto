@@ -2,34 +2,33 @@ syntax = "proto3";
 
 package cni.v1;
 
-//===================// CNI service //===================//
-
-// Service callable only by the kubelet.
-// The CNI is responsible for connecting or disconnecting a pod from the node's network.
-service CniService {
-  // Creates the network for a pod.
-  rpc AddPodNetwork(AddPodNetworkRequest) returns (AddPodNetworkResponse);
-
-  // Deletes the network for a pod.
-  rpc DeletePodNetwork(DeletePodNetworkRequest) returns (DeletePodNetworkResponse);
-
-  // Updates the network for a pod.
-  rpc UpdatePodNetwork(UpdatePodNetworkRequest) returns (UpdatePodNetworkResponse);
-
-  // Returns the network state for a pod.
-  rpc GetPodNetwork(GetPodNetworkRequest) returns (GetPodNetworkResponse);
-}
-
 // Identifies the pod that the kubelet is referring to.
 message PodRef {
-  // Unique identifier for the pod.
-  string pod_uid = 1;
-
   // Readable name for the pod.
-  string pod_name = 2;
+  string pod_name = 1;
+}
 
-  // Namespace Kubernetes du pod.
-  string namespace = 3;
+//===================// PodNetwork struct and states //===================//
+
+// Informations reseau principales d'un pod.
+message PodNetwork {
+  // State simple for knowing if the pod is ready on the network.
+  NetworkState state = 1;
+
+  // Name of the interface in the pod, often "eth0".
+  string interface_name = 2;
+
+  // IP address of the pod, for example "10.244.1.0".
+  string ip_address = 3;
+
+  // Gateway address, for example "10.244.1.1".
+  string gateway = 4;
+}
+
+enum NetworkState {
+  UNSPECIFIED = 0;
+  READY = 1;
+  ERROR = 2;
 }
 
 //===================// add PodNetwork //===================//
@@ -37,12 +36,6 @@ message PodRef {
 message AddPodNetworkRequest {
   // Pod to connect to the network.
   PodRef pod = 1;
-
-  // Identifier of the container sandbox created by the runtime.
-  string sandbox_id = 2;
-
-  // Path to the Linux network namespace of the pod.
-  string netns_path = 3;
 }
 
 message AddPodNetworkResponse {
@@ -55,12 +48,6 @@ message AddPodNetworkResponse {
 message DeletePodNetworkRequest {
   // Pod to disconnect from the network.
   PodRef pod = 1;
-
-  // Identifier of the container sandbox to clean up.
-  string sandbox_id = 2;
-
-  // Path to the Linux network namespace of the pod.
-  string netns_path = 3;
 }
 
 message DeletePodNetworkResponse {
@@ -95,25 +82,20 @@ message GetPodNetworkResponse {
   PodNetwork network = 1;
 }
 
-//===================// PodNetwork struct and states //===================//
+//===================// CNI service //===================//
 
-// Informations reseau principales d'un pod.
-message PodNetwork {
-  // State simple for knowing if the pod is ready on the network.
-  NetworkState state = 1;
+// Service callable only by the kubelet.
+// The CNI is responsible for connecting or disconnecting a pod from the node's network.
+service CniService {
+  // Creates the network for a pod.
+  rpc AddPodNetwork(AddPodNetworkRequest) returns (AddPodNetworkResponse);
 
-  // Name of the interface in the pod, often "eth0".
-  string interface_name = 2;
+  // Deletes the network for a pod.
+  rpc DeletePodNetwork(DeletePodNetworkRequest) returns (DeletePodNetworkResponse);
 
-  // IP address of the pod, for example "10.244.1.5".
-  string ip_address = 3;
+  // Updates the network for a pod.
+  rpc UpdatePodNetwork(UpdatePodNetworkRequest) returns (UpdatePodNetworkResponse);
 
-  // Gateway address, for example "10.244.1.1".
-  string gateway = 4;
-}
-
-enum NetworkState {
-  NETWORK_STATE_UNSPECIFIED = 0;
-  NETWORK_STATE_READY = 1;
-  NETWORK_STATE_ERROR = 2;
+  // Returns the network state for a pod.
+  rpc GetPodNetwork(GetPodNetworkRequest) returns (GetPodNetworkResponse);
 }
