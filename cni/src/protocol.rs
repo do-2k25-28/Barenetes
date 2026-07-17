@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use proto::cni::v1::{CniRequest, CniResponse};
 
 #[derive(Debug)]
