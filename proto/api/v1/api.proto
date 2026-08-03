@@ -3,8 +3,8 @@ syntax = "proto3";
 package api.v1;
 
 import "shared/v1/container.proto";
-import "shared/v1/pod.proto";
 import "shared/v1/node.proto";
+import "shared/v1/pod.proto";
 
 // ─── CLI → API ────────────────────────────────────────────
 
@@ -16,7 +16,7 @@ message CreatePodResponse {
 }
 
 message DeletePodRequest {
-  string name      = 1;
+  string name = 1;
   string namespace = 2;
 }
 message DeletePodResponse {
@@ -24,7 +24,7 @@ message DeletePodResponse {
 }
 
 message GetPodRequest {
-  string name      = 1;
+  string name = 1;
   string namespace = 2;
 }
 message GetPodResponse {
@@ -57,15 +57,14 @@ message WatchPodEvent {
 }
 
 message AssignPodRequest { // Scheduler reports the outcome of trying to place a pod
-  string name       = 1;
-  string namespace  = 2;
+  string name = 1;
+  string namespace = 2;
   oneof outcome {
-    string node_name            = 3; // scheduler placed the pod here
+    string node_name = 3; // scheduler placed the pod here
     string unschedulable_reason = 4; // scheduler couldn't find a fit
   }
 }
 message AssignPodResponse {}
-
 
 // ─── agent → API ────────────────────────────────────────────
 
@@ -80,36 +79,35 @@ message UpdateNodeStatusRequest {
 message UpdateNodeStatusResponse {}
 
 message WatchDesiredStateRequest { // agent subscribes to desired state for its node
-  string node_name = 1;  
+  string node_name = 1;
 }
 
 message WatchDesiredStateEvent {
-  Action    action = 1;
-  shared.v1.PodWithSpec pod    = 2;  // pod concerned by the event
+  Action action = 1;
+  shared.v1.PodWithSpec pod = 2; // pod concerned by the event
 
   enum Action {
-    RUN         = 0;
-    STOP        = 1;
+    RUN = 0;
+    STOP = 1;
   }
 }
-
 
 // ─── Services ─────────────────────────────────────────────────
 service ApiServer {
   // CLI → API
-  rpc CreatePod  (CreatePodRequest)  returns (CreatePodResponse);
-  rpc DeletePod  (DeletePodRequest)  returns (DeletePodResponse);
-  rpc GetPod     (GetPodRequest)     returns (GetPodResponse);
-  rpc ListPods   (ListPodsRequest)   returns (ListPodsResponse);
-  rpc GetNode    (GetNodeRequest)    returns (GetNodeResponse);
-  rpc ListNodes  (ListNodesRequest)  returns (ListNodesResponse);
+  rpc CreatePod(CreatePodRequest) returns (CreatePodResponse);
+  rpc DeletePod(DeletePodRequest) returns (DeletePodResponse);
+  rpc GetPod(GetPodRequest) returns (GetPodResponse);
+  rpc ListPods(ListPodsRequest) returns (ListPodsResponse);
+  rpc GetNode(GetNodeRequest) returns (GetNodeResponse);
+  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
 
   // scheduler → API
-  rpc WatchPods  (WatchPodsRequest)  returns (stream WatchPodEvent);
-  rpc AssignPod  (AssignPodRequest)  returns (AssignPodResponse);
+  rpc WatchPods(WatchPodsRequest) returns (stream WatchPodEvent);
+  rpc AssignPod(AssignPodRequest) returns (AssignPodResponse);
 
   // agent → API
-  rpc UpdatePodStatus   (UpdatePodStatusRequest)   returns (UpdatePodStatusResponse);
-  rpc UpdateNodeStatus  (UpdateNodeStatusRequest)  returns (UpdateNodeStatusResponse);
-  rpc WatchDesiredState (WatchDesiredStateRequest) returns (stream WatchDesiredStateEvent);
+  rpc UpdatePodStatus(UpdatePodStatusRequest) returns (UpdatePodStatusResponse);
+  rpc UpdateNodeStatus(UpdateNodeStatusRequest) returns (UpdateNodeStatusResponse);
+  rpc WatchDesiredState(WatchDesiredStateRequest) returns (stream WatchDesiredStateEvent);
 }
