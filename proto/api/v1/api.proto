@@ -2,7 +2,6 @@ syntax = "proto3";
 
 package api.v1;
 
-import "shared/v1/resources.proto";
 import "shared/v1/container.proto";
 import "shared/v1/pod.proto";
 import "shared/v1/node.proto";
