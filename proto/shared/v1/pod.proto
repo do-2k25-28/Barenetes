@@ -38,5 +38,5 @@ message PodDetail {
   string                   pod_ip             = 3;
   string                   message            = 4;
   Resources      resource_usage     = 5;
-  string                   node_id            = 6;
+  string                   node_name          = 6;
 }
