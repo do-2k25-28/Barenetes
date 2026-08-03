@@ -53,7 +53,7 @@ message WatchPodsRequest {} // Scheduler subscribes to all pod events to decide 
 
 message WatchPodEvent {
   shared.v1.EventType event_type = 1;
-  shared.v1.PodDetail pod                  = 2;
+  shared.v1.PodDetail pod = 2;
 }
 
 message AssignPodRequest { // Scheduler reports the outcome of trying to place a pod
