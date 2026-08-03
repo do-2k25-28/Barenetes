@@ -57,10 +57,13 @@ message WatchPodEvent {
   shared.v1.PodDetail pod                  = 2;
 }
 
-message AssignPodRequest { // Scheduler reports its placement decision for a pod
+message AssignPodRequest { // Scheduler reports the outcome of trying to place a pod
   string name       = 1;
   string namespace  = 2;
-  string node_name  = 3;
+  oneof outcome {
+    string node_name            = 3; // scheduler placed the pod here
+    string unschedulable_reason = 4; // scheduler couldn't find a fit
+  }
 }
 message AssignPodResponse {}
 
