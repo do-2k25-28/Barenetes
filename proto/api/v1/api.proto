@@ -57,6 +57,13 @@ message WatchPodEvent {
   shared.v1.PodDetail pod                  = 2;
 }
 
+message AssignPodRequest { // Scheduler reports its placement decision for a pod
+  string name       = 1;
+  string namespace  = 2;
+  string node_name  = 3;
+}
+message AssignPodResponse {}
+
 
 // ─── agent → API ────────────────────────────────────────────
 
@@ -97,6 +104,7 @@ service ApiServer {
 
   // scheduler → API
   rpc WatchPods  (WatchPodsRequest)  returns (stream WatchPodEvent);
+  rpc AssignPod  (AssignPodRequest)  returns (AssignPodResponse);
 
   // agent → API
   rpc UpdatePodStatus   (UpdatePodStatusRequest)   returns (UpdatePodStatusResponse);
