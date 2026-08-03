@@ -27,7 +27,7 @@ message Container {
 
 // Observed state of a single container running on a node
 enum State {
-  UNSPECIFIED = 0;
+  STATE_UNSPECIFIED = 0;
   ACTIVE = 1;
   CRASHED = 2;
   WAITING = 3;
