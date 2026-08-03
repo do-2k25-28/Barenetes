@@ -56,6 +56,13 @@ message WatchPodEvent {
   shared.v1.PodDetail pod = 2;
 }
 
+message WatchNodesRequest {} // Scheduler subscribes to all node events to schedule against current capacity
+
+message WatchNodeEvent {
+  shared.v1.EventType event_type = 1;
+  shared.v1.Node node = 2;
+}
+
 message AssignPodRequest { // Scheduler reports the outcome of trying to place a pod
   string name = 1;
   string namespace = 2;
@@ -104,6 +111,7 @@ service ApiServer {
 
   // scheduler → API
   rpc WatchPods(WatchPodsRequest) returns (stream WatchPodEvent);
+  rpc WatchNodes(WatchNodesRequest) returns (stream WatchNodeEvent);
   rpc AssignPod(AssignPodRequest) returns (AssignPodResponse);
 
   // agent → API
