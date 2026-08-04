@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package agent.v1;
 
-import "shared/v1/pod.proto";
+import "proto/shared/v1/pod.proto";
 
 service Kubelet {
     // Create or update the desired state of a pod
@@ -31,5 +31,3 @@ message DeletePodRequest {
 message DeletePodResponse {
     bool success = 1;
 }
-
-
