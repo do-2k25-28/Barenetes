@@ -1,3 +1,112 @@
 syntax = "proto3";
 
 package cni.v1;
+
+// Identifies the workload instance that the agent is referring to.
+message WorkloadRef {
+  // Readable name for the workload.
+  string workload_name = 1;
+
+  // Readable name for the workload instance.
+  string instance_name = 2;
+}
+
+// Identifies the tenant network used by a workload instance.
+message NetworkRef {
+  // Readable name for the network.
+  string network_name = 1;
+}
+
+//===================// WorkloadNetwork struct and states //===================//
+
+// Main network information for a workload instance.
+message WorkloadNetwork {
+  // Simple state indicating whether the workload is ready on the network.
+  NetworkState state = 1;
+
+  // Name of the interface in the workload, often "eth0".
+  string interface_name = 2;
+
+  // IP address of the workload, for example "10.244.1.0".
+  string ip_address = 3;
+
+  // Gateway address, for example "10.244.1.1".
+  string gateway = 4;
+
+  // Name of the dedicated tenant network.
+  string network_name = 5;
+}
+
+enum NetworkState {
+  UNSPECIFIED = 0;
+  READY = 1;
+  ERROR = 2;
+}
+
+//===================// add WorkloadNetwork //===================//
+
+message AddWorkloadNetworkRequest {
+  // Workload instance to connect to the network.
+  WorkloadRef workload = 1;
+
+  // Dedicated tenant network to use.
+  NetworkRef network = 2;
+}
+
+message AddWorkloadNetworkResponse {
+  // Network result given to the workload instance.
+  WorkloadNetwork network = 1;
+}
+
+//===================// delete WorkloadNetwork //===================//
+
+message DeleteWorkloadNetworkRequest {
+  // Workload instance to disconnect from the network.
+  WorkloadRef workload = 1;
+
+  // Dedicated tenant network used by the workload instance.
+  NetworkRef network = 2;
+}
+
+message DeleteWorkloadNetworkResponse {
+  // True if the cleanup was successful.
+  bool success = 1;
+}
+
+//===================// get WorkloadNetwork //===================//
+
+message GetWorkloadNetworkRequest {
+  // Workload instance for which to retrieve network state.
+  WorkloadRef workload = 1;
+
+  // Dedicated tenant network used by the workload instance.
+  NetworkRef network = 2;
+}
+
+message GetWorkloadNetworkResponse {
+  // Network state for the requested workload instance.
+  WorkloadNetwork network = 1;
+}
+
+// Request sent by the node agent to the CNI binary.
+message CniRequest {
+  oneof request {
+    AddWorkloadNetworkRequest add_workload_network = 1;
+    DeleteWorkloadNetworkRequest delete_workload_network = 2;
+    GetWorkloadNetworkRequest get_workload_network = 3;
+  }
+}
+
+// Response returned by the CNI binary to the node agent.
+message CniResponse {
+  oneof response {
+    AddWorkloadNetworkResponse add_workload_network = 1;
+    DeleteWorkloadNetworkResponse delete_workload_network = 2;
+    GetWorkloadNetworkResponse get_workload_network = 3;
+    CniError error = 4;
+  }
+}
+
+message CniError {
+  string message = 1;
+}
