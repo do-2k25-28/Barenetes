@@ -1,4 +1,5 @@
 mod handler;
+mod network;
 
 use handler::CniRpcService;
 use proto::cni::v1::cni_service_server::CniServiceServer;
@@ -13,6 +14,7 @@ const SOCKET_PATH: &str = "/run/barenetes/cni.sock";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    network::ensure_bridge()?;
     let listener = bind_socket(Path::new(SOCKET_PATH))?;
 
     let result = Server::builder()
