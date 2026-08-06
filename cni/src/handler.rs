@@ -51,28 +51,49 @@ impl CniService for CniRpcService {
 
     async fn delete_workload_network(
         &self,
-        _request: Request<DeleteWorkloadNetworkRequest>,
+        request: Request<DeleteWorkloadNetworkRequest>,
     ) -> Result<Response<DeleteWorkloadNetworkResponse>, Status> {
-        Err(Status::unimplemented(
-            "workload network deletion is not implemented",
-        ))
+        let pool = self.pool.clone();
+        let state = self.state.clone();
+        let operation_lock = self.operation_lock.clone();
+        let success = tokio::task::spawn_blocking(move || {
+            let _guard = operation_lock
+                .lock()
+                .map_err(|_| io::Error::other("CNI operation lock is poisoned"))?;
+            crate::network::delete_workload_network(request.into_inner(), &pool, &state)
+        })
+        .await
+        .map_err(|_| Status::internal("network worker failed"))?
+        .map_err(status_from_io)?;
+        Ok(Response::new(DeleteWorkloadNetworkResponse { success }))
     }
 
     async fn get_workload_network(
         &self,
-        _request: Request<GetWorkloadNetworkRequest>,
+        request: Request<GetWorkloadNetworkRequest>,
     ) -> Result<Response<GetWorkloadNetworkResponse>, Status> {
-        Err(Status::unimplemented(
-            "workload network lookup is not implemented",
-        ))
+        let state = self.state.clone();
+        let operation_lock = self.operation_lock.clone();
+        let network = tokio::task::spawn_blocking(move || {
+            let _guard = operation_lock
+                .lock()
+                .map_err(|_| io::Error::other("CNI operation lock is poisoned"))?;
+            crate::network::get_workload_network(request.into_inner(), &state)
+        })
+        .await
+        .map_err(|_| Status::internal("network worker failed"))?
+        .map_err(status_from_io)?;
+        Ok(Response::new(GetWorkloadNetworkResponse {
+            network: Some(network),
+        }))
     }
 }
 
 fn status_from_io(error: io::Error) -> Status {
     eprintln!("cni: {error}");
-    if error.kind() == io::ErrorKind::InvalidInput {
-        Status::invalid_argument(error.to_string())
-    } else {
-        Status::internal("workload network operation failed")
+    match error.kind() {
+        io::ErrorKind::InvalidInput => Status::invalid_argument(error.to_string()),
+        io::ErrorKind::NotFound => Status::not_found(error.to_string()),
+        _ => Status::internal("workload network operation failed"),
     }
 }

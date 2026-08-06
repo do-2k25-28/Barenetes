@@ -82,6 +82,17 @@ impl StateStore {
             stable_id(&[workload, instance, network])
         ))
     }
+
+    pub fn delete(&self, workload: &str, instance: &str, network: &str) -> io::Result<bool> {
+        match std::fs::remove_file(self.path(workload, instance, network)) {
+            Ok(()) => {
+                File::open(&self.directory)?.sync_all()?;
+                Ok(true)
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
 }
 
 pub fn stable_id(parts: &[&str]) -> String {
