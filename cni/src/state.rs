@@ -1,3 +1,4 @@
+use proto::cni::v1::PortMapping;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
@@ -19,6 +20,8 @@ pub struct WorkloadRecord {
     pub gateway: String,
     #[serde(default)]
     pub vlan_id: u32,
+    #[serde(default)]
+    pub port_mappings: Vec<PortMapping>,
 }
 
 #[derive(Clone)]
@@ -40,22 +43,12 @@ impl StateStore {
         network: &str,
     ) -> io::Result<Option<WorkloadRecord>> {
         let path = self.path(workload, instance, network);
-        let file = match File::open(path) {
+        let file = match File::open(&path) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error),
         };
-        let mut bytes = Vec::new();
-        file.take(MAX_STATE_SIZE + 1).read_to_end(&mut bytes)?;
-        if bytes.len() as u64 > MAX_STATE_SIZE {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "workload state is too large",
-            ));
-        }
-        serde_json::from_slice(&bytes)
-            .map(Some)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+        read_record(file).map(Some)
     }
 
     pub fn save(&self, record: &WorkloadRecord) -> io::Result<()> {
@@ -95,6 +88,42 @@ impl StateStore {
             Err(error) => Err(error),
         }
     }
+
+    pub fn port_is_used(&self, protocol: i32, host_port: u32) -> io::Result<bool> {
+        let entries = match std::fs::read_dir(&self.directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        for entry in entries {
+            let path = entry?.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            let record = read_record(File::open(path)?)?;
+            if record
+                .port_mappings
+                .iter()
+                .any(|mapping| mapping.protocol == protocol && mapping.host_port == host_port)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+}
+
+fn read_record(file: File) -> io::Result<WorkloadRecord> {
+    let mut bytes = Vec::new();
+    file.take(MAX_STATE_SIZE + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_STATE_SIZE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "workload state is too large",
+        ));
+    }
+    serde_json::from_slice(&bytes)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
 pub fn stable_id(parts: &[&str]) -> String {

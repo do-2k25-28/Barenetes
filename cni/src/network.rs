@@ -32,18 +32,30 @@ pub fn add_workload_network(
 ) -> io::Result<WorkloadNetwork> {
     let (workload, network, pid, interface) = validate_add_request(&request)?;
     let netns = open_netns(&request.netns_path)?;
+    crate::firewall::validate_mappings(&request.port_mappings)?;
     if let Some(record) = state.load(
         &workload.workload_name,
         &workload.instance_name,
         &network.network_name,
     )? {
-        if record.interface_name != interface || record.vlan_id != network.vlan_id {
+        if record.interface_name != interface
+            || record.vlan_id != network.vlan_id
+            || record.port_mappings != request.port_mappings
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "workload network already exists with different settings",
             ));
         }
         return Ok(record_to_network(&record));
+    }
+    for mapping in &request.port_mappings {
+        if state.port_is_used(mapping.protocol, mapping.host_port)? {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "host port is already used",
+            ));
+        }
     }
 
     let address = pool.allocate()?;
@@ -142,8 +154,15 @@ pub fn add_workload_network(
         ip_address: address.to_string(),
         gateway: GATEWAY.to_owned(),
         vlan_id: network.vlan_id,
+        port_mappings: request.port_mappings.clone(),
     };
+    if let Err(error) = crate::firewall::add_mappings(&record.ip_address, &record.port_mappings) {
+        let _ = run(IP, &["link", "delete", &record.host_interface]);
+        let _ = pool.release(address);
+        return Err(error);
+    }
     if let Err(error) = state.save(&record) {
+        let _ = crate::firewall::delete_mappings(&record.ip_address, &record.port_mappings);
         let _ = run(IP, &["link", "delete", &record.host_interface]);
         let _ = pool.release(address);
         return Err(error);
@@ -189,6 +208,7 @@ pub fn delete_workload_network(
     if succeeds(IP, &["link", "show", "dev", &record.host_interface])? {
         run(IP, &["link", "delete", &record.host_interface])?;
     }
+    crate::firewall::delete_mappings(&record.ip_address, &record.port_mappings)?;
     let address = record
         .ip_address
         .parse()

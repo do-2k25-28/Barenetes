@@ -67,6 +67,21 @@ message AddWorkloadNetworkRequest {
 
   // Interface name inside the workload network namespace.
   string interface_name = 4;
+
+  // Explicit host-to-workload port mappings.
+  repeated PortMapping port_mappings = 5;
+}
+
+message PortMapping {
+  uint32 host_port = 1;
+  uint32 workload_port = 2;
+  PortProtocol protocol = 3;
+}
+
+enum PortProtocol {
+  PORT_PROTOCOL_UNSPECIFIED = 0;
+  PORT_PROTOCOL_TCP = 1;
+  PORT_PROTOCOL_UDP = 2;
 }
 
 message AddWorkloadNetworkResponse {
