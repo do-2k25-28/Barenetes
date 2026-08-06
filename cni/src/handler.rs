@@ -97,3 +97,12 @@ fn status_from_io(error: io::Error) -> Status {
         _ => Status::internal("workload network operation failed"),
     }
 }
+
+fn status_from_io(error: io::Error) -> Status {
+    eprintln!("cni: {error}");
+    if error.kind() == io::ErrorKind::InvalidInput {
+        Status::invalid_argument(error.to_string())
+    } else {
+        Status::internal("workload network operation failed")
+    }
+}
