@@ -18,11 +18,11 @@
 //     }
 // }
 //
-// pub mod cni {
-//     pub mod v1 {
-//         tonic::include_proto!("cni.v1");
-//     }
-// }
+pub mod cni {
+    pub mod v1 {
+        tonic::include_proto!("cni.v1");
+    }
+}
 
 pub mod scheduler {
     pub mod v1 {
