@@ -11,7 +11,6 @@ const TOOL_DIRECTORIES: &[&str] = &["/usr/sbin", "/sbin", "/usr/bin", "/bin"];
 
 // Leaves room for the 50 bytes of VXLAN encapsulation.
 const DEFAULT_MTU: u32 = 1450;
-
 pub fn ensure_bridge() -> io::Result<()> {
     if unsafe { libc::geteuid() } != 0 {
         return Err(io::Error::new(
