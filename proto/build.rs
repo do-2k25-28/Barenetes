@@ -1,5 +1,9 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tonic_prost_build::configure().compile_protos(
+    let mut prost_config = tonic_prost_build::Config::new();
+    prost_config.protoc_executable(protoc_bin_vendored::protoc_bin_path()?);
+
+    tonic_prost_build::configure().compile_with_config(
+        prost_config,
         &[
             "agent/v1/kubelet.proto",
             "api/v1/api.proto",
