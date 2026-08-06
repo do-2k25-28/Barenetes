@@ -50,6 +50,7 @@ pub fn ensure_overlay() -> io::Result<()> {
     let mtu = crate::network::mtu()?.to_string();
     crate::network::run(IP, &["link", "set", "dev", VXLAN, "mtu", &mtu])?;
     crate::network::run(IP, &["link", "set", "dev", VXLAN, "up"])?;
+    crate::network::run(BRIDGE, &["vlan", "add", "dev", VXLAN, "vid", "1-4094"])?;
     for remote in remote_nodes {
         crate::network::run(
             BRIDGE,
