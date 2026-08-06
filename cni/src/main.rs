@@ -1,4 +1,5 @@
 mod handler;
+pub mod ip_pool;
 mod network;
 
 use handler::CniRpcService;
