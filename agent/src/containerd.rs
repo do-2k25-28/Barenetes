@@ -64,7 +64,7 @@ impl Containerd {
         self.pull_image(&container.image).await?;
         let config = self.image_config(&container.image).await?;
 
-        /// Writable layer on top of the image, mounted as the container rootfs.
+        // Writable layer on top of the image, mounted as the container rootfs.
         let mounts = SnapshotsClient::new(self.channel())
             .prepare(with_namespace!(
                 PrepareSnapshotRequest {
@@ -290,7 +290,7 @@ impl Containerd {
 
         let mut manifest = self.read_json(&target.digest).await?;
 
-        /// Multi-platform images point at a list of manifests, one per platform.
+        // Multi-platform images point at a list of manifests, one per platform.
         if let Some(manifests) = manifest["manifests"].as_array() {
             let platform = platform();
             let digest = manifests
