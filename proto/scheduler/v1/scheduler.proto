@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package scheduler.v1;
 
-import "proto/shared/v1/pod.proto";
+import "shared/v1/pod.proto";
 
 message SchedulePodRequest {
   shared.v1.Pod pod = 1;
