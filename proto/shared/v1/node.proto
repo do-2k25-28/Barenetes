@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package shared.v1;
 
-import "resources.proto";
+import "shared/v1/resources.proto";
 
 enum NodeStatus {
   READY = 0;
