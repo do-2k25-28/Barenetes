@@ -69,4 +69,41 @@ cargo run -p agent --example kubelet_cli -- delete default-web
 # deleted: true
 ```
 
+## Using a generic gRPC client instead of `kubelet_cli`
+
+`kubelet_cli` is only a convenience wrapper, the kubelet exposes a plain gRPC
+service (`agent.v1.Kubelet`). If you already have a gRPC client installed
+([grpcurl](https://github.com/fullstorydev/grpcurl), Postman) you can call the service
+directly, otherwise stick to `kubelet_cli`, it needs no extra tooling.
+
+Start the same nginx pod as above:
+
+```sh
+grpcurl -plaintext \
+  -import-path proto -proto agent/v1/kubelet.proto \
+  -d '{
+        "pod": {
+          "pod": { "name": "web" },
+          "spec": {
+            "namespace": "default",
+            "containers": [
+              { "name": "0", "image": "docker.io/library/nginx:alpine" }
+            ]
+          }
+        }
+      }' \
+  127.0.0.1:50052 agent.v1.Kubelet/ApplyPod
+# { "podId": "default-web" }
+```
+
+And delete it:
+
+```sh
+grpcurl -plaintext \
+  -import-path proto -proto agent/v1/kubelet.proto \
+  -d '{ "podId": "default-web", "gracePeriodSeconds": 5, "force": false }' \
+  127.0.0.1:50052 agent.v1.Kubelet/DeletePod
+# { "success": true }
+```
+
 
