@@ -2,8 +2,8 @@ syntax = "proto3";
 
 package shared.v1;
 
-import "resources.proto";
-import "container.proto";
+import "shared/v1/resources.proto";
+import "shared/v1/container.proto";
 
 
 enum PodStatus {

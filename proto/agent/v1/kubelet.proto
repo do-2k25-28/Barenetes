@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package agent.v1;
 
-import "proto/shared/v1/pod.proto";
+import "shared/v1/pod.proto";
 
 service Kubelet {
     // Create or update the desired state of a pod
