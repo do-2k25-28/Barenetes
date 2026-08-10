@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::time::Duration;
 
 use proto::agent::v1::kubelet_server::Kubelet;
@@ -38,6 +39,20 @@ impl Kubelet for KubeletService {
             .filter(|name| !name.is_empty())
             .ok_or_else(|| Status::invalid_argument("missing pod name"))?;
         let pod_id = pod_id(&spec.namespace, &name);
+
+        // Container names end up in the container ids, so they must be set and unique
+        let mut names = HashSet::new();
+        for container in &spec.containers {
+            if container.name.is_empty() {
+                return Err(Status::invalid_argument("missing container name"));
+            }
+            if !names.insert(&container.name) {
+                return Err(Status::invalid_argument(format!(
+                    "duplicate container name {}",
+                    container.name
+                )));
+            }
+        }
 
         println!("Applying pod {pod_id}");
 
