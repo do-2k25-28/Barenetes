@@ -177,7 +177,9 @@ pub fn delete_workload_network(
         &workload.instance_name,
         &network.network_name,
     )?;
-    pool.release(address)?;
+    if let Err(error) = pool.release(address) {
+        eprintln!("cni: failed to release {address}: {error}");
+    }
     Ok(true)
 }
 
