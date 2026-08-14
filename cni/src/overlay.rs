@@ -1,8 +1,8 @@
 use std::io;
 use std::net::IpAddr;
 
-const IP: &str = "/usr/sbin/ip";
-const BRIDGE: &str = "/usr/sbin/bridge";
+const IP: &str = "ip";
+const BRIDGE: &str = "bridge";
 const VXLAN: &str = "barenetes-vx";
 
 pub fn ensure_overlay() -> io::Result<()> {
@@ -47,6 +47,8 @@ pub fn ensure_overlay() -> io::Result<()> {
             crate::network::BRIDGE_NAME,
         ],
     )?;
+    let mtu = crate::network::mtu()?.to_string();
+    crate::network::run(IP, &["link", "set", "dev", VXLAN, "mtu", &mtu])?;
     crate::network::run(IP, &["link", "set", "dev", VXLAN, "up"])?;
     for remote in remote_nodes {
         crate::network::run(
@@ -66,18 +68,25 @@ pub fn ensure_overlay() -> io::Result<()> {
 }
 
 pub fn node_id() -> io::Result<u8> {
-    std::env::var("BARENETES_NODE_ID")
+    let Some(value) = std::env::var("BARENETES_NODE_ID")
         .ok()
-        .map(|value| {
-            value.parse().map_err(|_| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "BARENETES_NODE_ID must be between 0 and 255",
-                )
-            })
-        })
-        .transpose()
-        .map(|value| value.unwrap_or(0))
+        .filter(|value| !value.is_empty())
+    else {
+        return if remote_nodes()?.is_empty() {
+            Ok(0)
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "BARENETES_NODE_ID is required with remote nodes",
+            ))
+        };
+    };
+    value.parse().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "BARENETES_NODE_ID must be between 0 and 255",
+        )
+    })
 }
 
 fn remote_nodes() -> io::Result<Vec<IpAddr>> {
