@@ -4,11 +4,17 @@ use std::io;
 
 use crate::network::{run, succeeds};
 
-const IPTABLES: &str = "/usr/sbin/iptables";
-const SYSCTL: &str = "/usr/sbin/sysctl";
+const IPTABLES: &str = "iptables";
+const SYSCTL: &str = "sysctl";
+const FORWARD_CHAIN: &str = "BARENETES-FORWARD";
+const PREROUTING_CHAIN: &str = "BARENETES-PREROUTING";
 
 pub fn ensure_egress() -> io::Result<()> {
     run(SYSCTL, &["-q", "-w", "net.ipv4.ip_forward=1"])?;
+    ensure_chain("nat", PREROUTING_CHAIN)?;
+    ensure_jump("nat", "PREROUTING", PREROUTING_CHAIN)?;
+    ensure_chain("filter", FORWARD_CHAIN)?;
+    ensure_jump("filter", "FORWARD", FORWARD_CHAIN)?;
     ensure_rule(&[
         "-t",
         "nat",
@@ -21,7 +27,54 @@ pub fn ensure_egress() -> io::Result<()> {
         crate::network::BRIDGE_NAME,
         "-j",
         "MASQUERADE",
+    ])?;
+    ensure_rule(&[
+        "-t",
+        "filter",
+        "-C",
+        FORWARD_CHAIN,
+        "-m",
+        "conntrack",
+        "--ctstate",
+        "ESTABLISHED,RELATED",
+        "-j",
+        "ACCEPT",
+    ])?;
+    ensure_rule(&[
+        "-t",
+        "filter",
+        "-C",
+        FORWARD_CHAIN,
+        "-i",
+        crate::network::BRIDGE_NAME,
+        "-j",
+        "ACCEPT",
+    ])?;
+    ensure_rule(&[
+        "-t",
+        "filter",
+        "-C",
+        FORWARD_CHAIN,
+        "-o",
+        crate::network::BRIDGE_NAME,
+        "-j",
+        "ACCEPT",
     ])
+}
+
+fn ensure_chain(table: &str, chain: &str) -> io::Result<()> {
+    if succeeds(IPTABLES, &["-t", table, "-S", chain])? {
+        return Ok(());
+    }
+    run(IPTABLES, &["-t", table, "-N", chain])
+}
+
+// Inserted first so that a DROP policy or another tool's rules cannot shadow it.
+fn ensure_jump(table: &str, parent: &str, chain: &str) -> io::Result<()> {
+    if succeeds(IPTABLES, &["-t", table, "-C", parent, "-j", chain])? {
+        return Ok(());
+    }
+    run(IPTABLES, &["-t", table, "-I", parent, "1", "-j", chain])
 }
 
 pub fn validate_mappings(mappings: &[PortMapping]) -> io::Result<()> {
@@ -79,44 +132,39 @@ pub fn delete_mappings(address: &str, mappings: &[PortMapping]) -> io::Result<()
     Ok(())
 }
 
+// Scoped to traffic entering the node, so that workload traffic is not caught too.
+fn mapping_rule<'a>(protocol: &'a str, host: &'a str, destination: &'a str) -> [&'a str; 15] {
+    [
+        "-t",
+        "nat",
+        "-C",
+        PREROUTING_CHAIN,
+        "!",
+        "-i",
+        crate::network::BRIDGE_NAME,
+        "-p",
+        protocol,
+        "--dport",
+        host,
+        "-j",
+        "DNAT",
+        "--to-destination",
+        destination,
+    ]
+}
+
 fn add_mapping(address: &str, mapping: &PortMapping) -> io::Result<()> {
     let protocol = protocol(mapping)?;
     let host = mapping.host_port.to_string();
     let destination = format!("{address}:{}", mapping.workload_port);
-    ensure_rule(&[
-        "-t",
-        "nat",
-        "-C",
-        "PREROUTING",
-        "-p",
-        protocol,
-        "--dport",
-        &host,
-        "-j",
-        "DNAT",
-        "--to-destination",
-        &destination,
-    ])
+    ensure_rule(&mapping_rule(protocol, &host, &destination))
 }
 
 fn delete_mapping(address: &str, mapping: &PortMapping) -> io::Result<()> {
     let protocol = protocol(mapping)?;
     let host = mapping.host_port.to_string();
     let destination = format!("{address}:{}", mapping.workload_port);
-    let check = [
-        "-t",
-        "nat",
-        "-C",
-        "PREROUTING",
-        "-p",
-        protocol,
-        "--dport",
-        &host,
-        "-j",
-        "DNAT",
-        "--to-destination",
-        &destination,
-    ];
+    let check = mapping_rule(protocol, &host, &destination);
     if !succeeds(IPTABLES, &check)? {
         return Ok(());
     }
