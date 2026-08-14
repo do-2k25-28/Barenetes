@@ -53,14 +53,17 @@ pub fn ensure_overlay() -> io::Result<()> {
     for remote in remote_nodes {
         crate::network::run(
             BRIDGE,
+            // append, not replace: the kernel rejects replace on this entry, and each
+            // remote is an additional flooding destination rather than a substitute.
             &[
                 "fdb",
-                "replace",
+                "append",
                 "00:00:00:00:00:00",
                 "dev",
                 VXLAN,
                 "dst",
                 &remote.to_string(),
+                "self",
             ],
         )?;
     }
