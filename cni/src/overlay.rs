@@ -51,6 +51,8 @@ pub fn ensure_overlay() -> io::Result<()> {
     crate::network::run(IP, &["link", "set", "dev", VXLAN, "mtu", &mtu])?;
     crate::network::run(IP, &["link", "set", "dev", VXLAN, "up"])?;
     crate::network::run(BRIDGE, &["vlan", "add", "dev", VXLAN, "vid", "1-4094"])?;
+    // The default pvid would carry untagged frames from the overlay into VLAN 1.
+    crate::network::run(BRIDGE, &["vlan", "del", "dev", VXLAN, "vid", "1"])?;
     for remote in remote_nodes {
         crate::network::run(
             BRIDGE,
