@@ -468,3 +468,90 @@ pub fn run(program: &str, arguments: &[&str]) -> io::Result<()> {
         )))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(netns_path: &str) -> AddWorkloadNetworkRequest {
+        AddWorkloadNetworkRequest {
+            workload: Some(WorkloadRef {
+                workload_name: "api".into(),
+                instance_name: "api-1".into(),
+            }),
+            network: Some(NetworkRef {
+                network_name: "tenant-a".into(),
+                vlan_id: 100,
+            }),
+            netns_path: netns_path.into(),
+            interface_name: String::new(),
+            port_mappings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn accepts_a_valid_request() {
+        let request = request("/proc/4242/ns/net");
+
+        let (_, _, pid, interface) = validate_add_request(&request).unwrap();
+
+        assert_eq!(pid, 4242);
+        assert_eq!(interface, "eth0");
+    }
+
+    #[test]
+    fn rejects_malformed_netns_paths() {
+        for path in [
+            "",
+            "proc/42/ns/net",
+            "/proc/0/ns/net",
+            "/proc/self/ns/net",
+            "/proc/../proc/1/ns/net",
+            "/proc/42/ns/net/extra",
+            "/var/run/netns/pod",
+        ] {
+            assert!(
+                validate_add_request(&request(path)).is_err(),
+                "{path} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_the_host_network_namespace() {
+        assert_eq!(
+            open_netns("/proc/self/ns/net").unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_names() {
+        let too_long = "a".repeat(64);
+        for name in ["", "a/b", "a b", "a;b", "a$(id)", too_long.as_str()] {
+            assert!(validate_name(name).is_err(), "{name} should be rejected");
+        }
+        assert!(validate_name("api-1.default_x").is_ok());
+    }
+
+    #[test]
+    fn rejects_vlan_ids_outside_the_bridge_range() {
+        for vlan_id in [0, 4095, 65536] {
+            let mut request = request("/proc/4242/ns/net");
+            request.network.as_mut().unwrap().vlan_id = vlan_id;
+
+            assert!(
+                validate_add_request(&request).is_err(),
+                "vlan {vlan_id} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_interface_names_the_kernel_cannot_hold() {
+        let mut request = request("/proc/4242/ns/net");
+        request.interface_name = "e".repeat(16);
+
+        assert!(validate_add_request(&request).is_err());
+    }
+}
