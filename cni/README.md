@@ -1,24 +1,24 @@
 # CNI
 
-Démon réseau local appelé par l’agent via gRPC pour connecter les workloads au réseau du nœud.
+Local network daemon called by the agent over gRPC to connect workloads to the node network.
 
-## Fonctionnalités
+## Features
 
-- Bridge Linux, veth et allocation persistante d’adresses IP.
-- Isolation VLAN et overlay VXLAN multi-nœuds.
-- Règles firewall et redirection de ports TCP/UDP.
-- API gRPC `AddWorkloadNetwork`, `GetWorkloadNetwork` et `DeleteWorkloadNetwork`.
+- Linux bridge, veth interfaces, and persistent IP address allocation.
+- VLAN isolation and multi-node VXLAN overlay.
+- Firewall rules and TCP/UDP port forwarding.
+- gRPC API: `AddWorkloadNetwork`, `GetWorkloadNetwork`, and `DeleteWorkloadNetwork`.
 
-## Exemples
+## Examples
 
 ```bash
 cargo build --release -p cni
 sudo BARENETES_NODE_ID=1 ./target/release/cni
 ```
 
-Le daemon configure le bridge, l’IPAM et le firewall sur le nœud.
+The daemon configures the bridge, IPAM, and firewall on the node.
 
-Connexion d’un workload avec veth, IP et VLAN :
+Connect a workload with veth, IP, and VLAN:
 
 ```json
 {
@@ -29,7 +29,7 @@ Connexion d’un workload avec veth, IP et VLAN :
 }
 ```
 
-Overlay VXLAN multi-nœuds :
+Multi-node VXLAN overlay:
 
 ```bash
 BARENETES_NODE_ID=1 \
@@ -38,11 +38,11 @@ BARENETES_REMOTE_NODE_IPS=192.168.1.11 \
 ./target/release/cni
 ```
 
-Redirection firewall TCP/UDP dans `AddWorkloadNetwork` :
+TCP/UDP firewall forwarding in `AddWorkloadNetwork`:
 
 ```json
 {"port_mappings": [{"host_port": 8080, "workload_port": 80, "protocol": "PORT_PROTOCOL_TCP"}]}
 ```
 
-L’agent utilise ensuite `GetWorkloadNetwork` puis `DeleteWorkloadNetwork` sur
-`/run/barenetes/cni.sock`, selon le contrat `proto/cni/v1/cni.proto`.
+The agent then uses `GetWorkloadNetwork` and `DeleteWorkloadNetwork` through
+`/run/barenetes/cni.sock`, according to the `proto/cni/v1/cni.proto` contract.
