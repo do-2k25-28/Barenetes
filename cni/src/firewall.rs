@@ -2,8 +2,8 @@ use proto::cni::v1::{PortMapping, PortProtocol};
 use std::collections::BTreeSet;
 use std::io;
 
-use crate::bridge::BRIDGE_NAME;
-use crate::system::{run, succeeds};
+use crate::network::bridge::BRIDGE_NAME;
+use crate::network::system::{run, succeeds};
 
 const IPTABLES: &str = "iptables";
 const SYSCTL: &str = "sysctl";

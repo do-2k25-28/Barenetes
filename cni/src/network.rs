@@ -4,8 +4,12 @@ use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::io::AsRawFd;
 
-use crate::bridge::{self, mtu};
-use crate::system::{run, succeeds};
+pub(crate) mod bridge;
+pub(crate) mod overlay;
+pub(crate) mod system;
+
+use self::bridge::mtu;
+use self::system::{run, succeeds};
 
 use crate::state::{StateStore, WorkloadRecord, stable_id};
 use proto::cni::v1::{
@@ -353,7 +357,7 @@ fn netns_matches(netns: &File, pid: u32) -> io::Result<bool> {
 
 fn run_in_namespace(netns: &File, arguments: &[&str]) -> io::Result<()> {
     let target = format!("--net=/proc/self/fd/{}", netns.as_raw_fd());
-    let ip = crate::system::resolve(IP)?;
+    let ip = system::resolve(IP)?;
     let ip = ip
         .to_str()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "ip path is not valid UTF-8"))?;

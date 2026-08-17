@@ -1,6 +1,6 @@
 use std::io;
 
-use crate::system::{run, succeeds};
+use super::system::{run, succeeds};
 
 const IP: &str = "ip";
 pub(crate) const BRIDGE_NAME: &str = "barenetes0";
@@ -14,14 +14,12 @@ pub(crate) fn ensure() -> io::Result<()> {
             "CNI network setup requires root privileges",
         ));
     }
-
     if !succeeds(IP, &["link", "show", "dev", BRIDGE_NAME])?
         && !succeeds(IP, &["link", "add", "name", BRIDGE_NAME, "type", "bridge"])?
         && !succeeds(IP, &["link", "show", "dev", BRIDGE_NAME])?
     {
         return Err(io::Error::other("failed to create CNI bridge"));
     }
-
     run(
         IP,
         &["address", "replace", BRIDGE_ADDRESS, "dev", BRIDGE_NAME],
