@@ -1,6 +1,10 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut prost_config = tonic_prost_build::Config::new();
     prost_config.protoc_executable(protoc_bin_vendored::protoc_bin_path()?);
+    prost_config.type_attribute(
+        ".cni.v1.PortMapping",
+        "#[derive(serde::Serialize, serde::Deserialize)]",
+    );
 
     tonic_prost_build::configure().compile_with_config(
         prost_config,

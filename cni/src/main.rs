@@ -1,3 +1,4 @@
+mod firewall;
 mod handler;
 mod ip_pool;
 mod network;
@@ -22,6 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = ip_pool()?;
     network::ensure_bridge()?;
     overlay::ensure_overlay()?;
+    firewall::ensure_egress()?;
     let listener = bind_socket(Path::new(SOCKET_PATH))?;
 
     let result = Server::builder()
