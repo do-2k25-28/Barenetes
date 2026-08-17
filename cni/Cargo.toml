@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+libc = "0.2.186"
 proto = { path = "../proto" }
 tokio = { version = "1.52.0", features = ["macros", "net", "rt-multi-thread", "signal"] }
 tokio-stream = { version = "0.1.18", features = ["net"] }
