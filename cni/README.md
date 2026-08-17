@@ -47,4 +47,4 @@ Optionnel dans `Add` : `interface_name` (`eth0` par défaut) et `port_mappings`
 ## Limite actuelle
 
 Le workload obtient une IP et une route par défaut mais ne joint pas encore sa passerelle
-sous filtrage VLAN. Voir `docs/cni-b1-b2.md`.
+sous filtrage VLAN.
