@@ -1,79 +1,13 @@
-pub mod firewall;
-pub mod handler;
-pub mod ip_pool;
-pub mod network;
-pub mod overlay;
-pub mod state;
+mod firewall;
+mod handler;
+mod ip_pool;
+mod network;
+mod runtime;
+mod state;
 
-use handler::CniRpcService;
-use proto::cni::v1::cni_service_server::CniServiceServer;
-use std::io;
-use std::net::Ipv4Addr;
-use std::os::unix::fs::{FileTypeExt, PermissionsExt};
-use std::path::Path;
-use tokio::net::UnixListener;
-use tokio_stream::wrappers::UnixListenerStream;
-use tonic::transport::Server;
+#[cfg(test)]
+mod tests;
 
-const SOCKET_PATH: &str = "/run/barenetes/cni.sock";
-
-pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    // Built first: an invalid node configuration must fail before anything is created.
-    let pool = ip_pool()?;
-    network::ensure_bridge()?;
-    overlay::ensure_overlay()?;
-    firewall::ensure_egress()?;
-    let listener = bind_socket(Path::new(SOCKET_PATH))?;
-
-    let result = Server::builder()
-        .add_service(CniServiceServer::new(CniRpcService::new(
-            pool,
-            state::StateStore::new(Path::new("/var/lib/barenetes/cni/workloads")),
-        )))
-        .serve_with_incoming_shutdown(UnixListenerStream::new(listener), shutdown_signal())
-        .await;
-
-    remove_socket(Path::new(SOCKET_PATH))?;
-    result?;
-    Ok(())
-}
-
-fn ip_pool() -> io::Result<ip_pool::IpPool> {
-    let node_id = overlay::node_id()?;
-    ip_pool::IpPool::new(
-        "/var/lib/barenetes/cni",
-        Ipv4Addr::new(10, 244, node_id, 2),
-        Ipv4Addr::new(10, 244, node_id, 254),
-    )
-}
-
-pub fn bind_socket(path: &Path) -> io::Result<UnixListener> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "socket has no parent"))?;
-    std::fs::create_dir_all(parent)?;
-    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o750))?;
-
-    remove_socket(path)?;
-    let listener = UnixListener::bind(path)?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660))?;
-    Ok(listener)
-}
-
-pub fn remove_socket(path: &Path) -> io::Result<()> {
-    match std::fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_socket() => std::fs::remove_file(path),
-        Ok(_) => Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "refusing to replace a non-socket filesystem entry",
-        )),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
-    }
-}
-
-async fn shutdown_signal() {
-    if let Err(error) = tokio::signal::ctrl_c().await {
-        eprintln!("cni: failed to install shutdown signal handler: {error}");
-    }
-}
+pub use runtime::run;
+#[cfg(test)]
+pub(crate) use runtime::socket::{bind as bind_socket, remove as remove_socket};

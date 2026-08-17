@@ -10,14 +10,14 @@ use tonic::{Request, Response, Status};
 use crate::ip_pool::IpPool;
 use crate::state::StateStore;
 
-pub struct CniRpcService {
+pub(crate) struct CniRpcService {
     pool: IpPool,
     state: StateStore,
     operation_lock: Arc<Mutex<()>>,
 }
 
 impl CniRpcService {
-    pub fn new(pool: IpPool, state: StateStore) -> Self {
+    pub(crate) fn new(pool: IpPool, state: StateStore) -> Self {
         Self {
             pool,
             state,

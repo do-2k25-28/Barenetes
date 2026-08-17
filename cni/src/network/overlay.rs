@@ -1,11 +1,13 @@
 use std::io;
 use std::net::IpAddr;
 
+use super::{bridge, system};
+
 const IP: &str = "ip";
 const BRIDGE: &str = "bridge";
 const VXLAN: &str = "barenetes-vx";
 
-pub fn ensure_overlay() -> io::Result<()> {
+pub(crate) fn ensure_overlay() -> io::Result<()> {
     let remote_nodes = remote_nodes()?;
     let Some(local_ip) = parse_optional_ip("BARENETES_NODE_IP")? else {
         return if remote_nodes.is_empty() {
@@ -17,8 +19,8 @@ pub fn ensure_overlay() -> io::Result<()> {
             ))
         };
     };
-    if !crate::network::succeeds(IP, &["link", "show", "dev", VXLAN])? {
-        crate::network::run(
+    if !system::succeeds(IP, &["link", "show", "dev", VXLAN])? {
+        system::run(
             IP,
             &[
                 "link",
@@ -36,28 +38,18 @@ pub fn ensure_overlay() -> io::Result<()> {
             ],
         )?;
     }
-    crate::network::run(
+    system::run(
         IP,
-        &[
-            "link",
-            "set",
-            "dev",
-            VXLAN,
-            "master",
-            crate::network::BRIDGE_NAME,
-        ],
+        &["link", "set", "dev", VXLAN, "master", bridge::BRIDGE_NAME],
     )?;
-    let mtu = crate::network::mtu()?.to_string();
-    crate::network::run(IP, &["link", "set", "dev", VXLAN, "mtu", &mtu])?;
-    crate::network::run(IP, &["link", "set", "dev", VXLAN, "up"])?;
-    crate::network::run(BRIDGE, &["vlan", "add", "dev", VXLAN, "vid", "1-4094"])?;
-    // The default pvid would carry untagged frames from the overlay into VLAN 1.
-    crate::network::run(BRIDGE, &["vlan", "del", "dev", VXLAN, "vid", "1"])?;
+    let mtu = bridge::mtu()?.to_string();
+    system::run(IP, &["link", "set", "dev", VXLAN, "mtu", &mtu])?;
+    system::run(IP, &["link", "set", "dev", VXLAN, "up"])?;
+    system::run(BRIDGE, &["vlan", "add", "dev", VXLAN, "vid", "1-4094"])?;
+    system::run(BRIDGE, &["vlan", "del", "dev", VXLAN, "vid", "1"])?;
     for remote in remote_nodes {
-        crate::network::run(
+        system::run(
             BRIDGE,
-            // append, not replace: the kernel rejects replace on this entry, and each
-            // remote is an additional flooding destination rather than a substitute.
             &[
                 "fdb",
                 "append",
@@ -73,7 +65,7 @@ pub fn ensure_overlay() -> io::Result<()> {
     Ok(())
 }
 
-pub fn node_id() -> io::Result<u8> {
+pub(crate) fn node_id() -> io::Result<u8> {
     let Some(value) = std::env::var("BARENETES_NODE_ID")
         .ok()
         .filter(|value| !value.is_empty())

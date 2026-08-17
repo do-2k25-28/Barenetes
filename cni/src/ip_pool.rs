@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 const MAX_STATE_SIZE: u64 = 1024 * 1024;
 
 #[derive(Clone)]
-pub struct IpPool {
+pub(crate) struct IpPool {
     directory: PathBuf,
     first: u32,
     last: u32,
@@ -22,7 +22,11 @@ struct PoolState {
 }
 
 impl IpPool {
-    pub fn new(directory: impl Into<PathBuf>, first: Ipv4Addr, last: Ipv4Addr) -> io::Result<Self> {
+    pub(crate) fn new(
+        directory: impl Into<PathBuf>,
+        first: Ipv4Addr,
+        last: Ipv4Addr,
+    ) -> io::Result<Self> {
         if u32::from(first) > u32::from(last) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -36,7 +40,7 @@ impl IpPool {
         })
     }
 
-    pub fn allocate(&self) -> io::Result<Ipv4Addr> {
+    pub(crate) fn allocate(&self) -> io::Result<Ipv4Addr> {
         self.with_state(|state| {
             let address = (self.first..=self.last)
                 .map(Ipv4Addr::from)
@@ -47,7 +51,7 @@ impl IpPool {
         })
     }
 
-    pub fn release(&self, address: Ipv4Addr) -> io::Result<bool> {
+    pub(crate) fn release(&self, address: Ipv4Addr) -> io::Result<bool> {
         let numeric = u32::from(address);
         if numeric < self.first || numeric > self.last {
             return Err(io::Error::new(

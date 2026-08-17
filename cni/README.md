@@ -1,50 +1,48 @@
 # CNI
 
-Démon réseau du nœud. L'agent l'appelle en gRPC sur `/run/barenetes/cni.sock` pour
-attacher un workload au réseau, lire son état, et l'en détacher.
+Démon réseau local appelé par l’agent via gRPC pour connecter les workloads au réseau du nœud.
 
-## Lancer
+## Fonctionnalités
 
-Root obligatoire, `iproute2` et `iptables` installés.
+- Bridge Linux, veth et allocation persistante d’adresses IP.
+- Isolation VLAN et overlay VXLAN multi-nœuds.
+- Règles firewall et redirection de ports TCP/UDP.
+- API gRPC `AddWorkloadNetwork`, `GetWorkloadNetwork` et `DeleteWorkloadNetwork`.
+
+## Exemples
 
 ```bash
 cargo build --release -p cni
 sudo BARENETES_NODE_ID=1 ./target/release/cni
 ```
 
-Autres variables : `BARENETES_NODE_IP` et `BARENETES_REMOTE_NODE_IPS` pour l'overlay
-multi-nœuds, `BARENETES_MTU` (1450 par défaut).
+Le daemon configure le bridge, l’IPAM et le firewall sur le nœud.
 
-## API
-
-`proto/cni/v1/cni.proto` : `AddWorkloadNetwork`, `GetWorkloadNetwork`,
-`DeleteWorkloadNetwork`.
+Connexion d’un workload avec veth, IP et VLAN :
 
 ```json
 {
-  "workload":   { "workload_name": "api", "instance_name": "api-1" },
-  "network":    { "network_name": "tenant-a", "vlan_id": 100 },
-  "netns_path": "/proc/4242/ns/net"
+  "workload": {"workload_name": "api", "instance_name": "api-1"},
+  "network": {"network_name": "tenant-a", "vlan_id": 100},
+  "netns_path": "/proc/4242/ns/net",
+  "interface_name": "eth0"
 }
 ```
 
-Retourne l'IP, la passerelle et l'interface. `Get` et `Delete` prennent le même
-`workload` + `network`, sans `netns_path`.
+Overlay VXLAN multi-nœuds :
 
-Optionnel dans `Add` : `interface_name` (`eth0` par défaut) et `port_mappings`
-(`host_port`, `workload_port`, `protocol`).
+```bash
+BARENETES_NODE_ID=1 \
+BARENETES_NODE_IP=192.168.1.10 \
+BARENETES_REMOTE_NODE_IPS=192.168.1.11 \
+./target/release/cni
+```
 
-## Intégration
+Redirection firewall TCP/UDP dans `AddWorkloadNetwork` :
 
-1. Démarrer le sandbox du pod, récupérer son PID.
-2. `Add` avec `netns_path = /proc/<pid>/ns/net`.
-3. `Delete` avant d'arrêter le sandbox.
+```json
+{"port_mappings": [{"host_port": 8080, "workload_port": 80, "protocol": "PORT_PROTOCOL_TCP"}]}
+```
 
-- `netns_path` doit être exactement `/proc/<pid>/ns/net`, celui de l'hôte est refusé.
-- `Add` est idempotent, sauf si les paramètres changent — dans ce cas c'est une erreur.
-- `vlan_id` est choisi par l'appelant : le même pour un tenant, jamais partagé entre deux.
-
-## Limite actuelle
-
-Le workload obtient une IP et une route par défaut mais ne joint pas encore sa passerelle
-sous filtrage VLAN.
+L’agent utilise ensuite `GetWorkloadNetwork` puis `DeleteWorkloadNetwork` sur
+`/run/barenetes/cni.sock`, selon le contrat `proto/cni/v1/cni.proto`.
