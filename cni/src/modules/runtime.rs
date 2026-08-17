@@ -1,4 +1,5 @@
-pub(crate) mod socket;
+#[path = "runtime/socket.rs"]
+mod socket;
 
 use crate::handler::CniRpcService;
 use crate::{firewall, network, state};
@@ -11,8 +12,8 @@ use tonic::transport::Server;
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let pool = ip_pool()?;
-    network::bridge::ensure()?;
-    network::overlay::ensure_overlay()?;
+    network::ensure_bridge()?;
+    network::ensure_overlay()?;
     firewall::ensure_egress()?;
     let listener = socket::bind(Path::new("/run/barenetes/cni.sock"))?;
 
@@ -30,7 +31,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn ip_pool() -> io::Result<crate::ip_pool::IpPool> {
-    let node_id = network::overlay::node_id()?;
+    let node_id = network::node_id()?;
     crate::ip_pool::IpPool::new(
         "/var/lib/barenetes/cni",
         Ipv4Addr::new(10, 244, node_id, 2),

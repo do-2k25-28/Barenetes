@@ -4,12 +4,9 @@ use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::io::AsRawFd;
 
-pub(crate) mod bridge;
-pub(crate) mod overlay;
-pub(crate) mod system;
-
-use self::bridge::mtu;
-use self::system::{run, succeeds};
+use super::bridge;
+use super::bridge::mtu;
+use super::system::{self, run, succeeds};
 
 use crate::state::{StateStore, WorkloadRecord, stable_id};
 use proto::cni::v1::{

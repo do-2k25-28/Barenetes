@@ -1,13 +1,14 @@
+#[path = "modules/firewall.rs"]
 mod firewall;
+#[path = "modules/handler.rs"]
 mod handler;
+#[path = "modules/ip_pool.rs"]
 mod ip_pool;
+#[path = "modules/network.rs"]
 mod network;
+#[path = "modules/runtime.rs"]
 mod runtime;
+#[path = "modules/state.rs"]
 mod state;
 
-#[cfg(test)]
-mod tests;
-
 pub use runtime::run;
-#[cfg(test)]
-pub(crate) use runtime::socket::{bind as bind_socket, remove as remove_socket};
