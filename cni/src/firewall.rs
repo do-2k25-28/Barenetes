@@ -2,14 +2,15 @@ use proto::cni::v1::{PortMapping, PortProtocol};
 use std::collections::BTreeSet;
 use std::io;
 
-use crate::network::{run, succeeds};
+use crate::bridge::BRIDGE_NAME;
+use crate::system::{run, succeeds};
 
 const IPTABLES: &str = "iptables";
 const SYSCTL: &str = "sysctl";
 const FORWARD_CHAIN: &str = "BARENETES-FORWARD";
 const PREROUTING_CHAIN: &str = "BARENETES-PREROUTING";
 
-pub fn ensure_egress() -> io::Result<()> {
+pub(crate) fn ensure_egress() -> io::Result<()> {
     run(SYSCTL, &["-q", "-w", "net.ipv4.ip_forward=1"])?;
     ensure_chain("nat", PREROUTING_CHAIN)?;
     ensure_jump("nat", "PREROUTING", PREROUTING_CHAIN)?;
@@ -24,7 +25,7 @@ pub fn ensure_egress() -> io::Result<()> {
         "10.244.0.0/16",
         "!",
         "-o",
-        crate::network::BRIDGE_NAME,
+        BRIDGE_NAME,
         "-j",
         "MASQUERADE",
     ])?;
@@ -46,7 +47,7 @@ pub fn ensure_egress() -> io::Result<()> {
         "-C",
         FORWARD_CHAIN,
         "-i",
-        crate::network::BRIDGE_NAME,
+        BRIDGE_NAME,
         "-j",
         "ACCEPT",
     ])?;
@@ -56,7 +57,7 @@ pub fn ensure_egress() -> io::Result<()> {
         "-C",
         FORWARD_CHAIN,
         "-o",
-        crate::network::BRIDGE_NAME,
+        BRIDGE_NAME,
         "-j",
         "ACCEPT",
     ])
@@ -77,7 +78,7 @@ fn ensure_jump(table: &str, parent: &str, chain: &str) -> io::Result<()> {
     run(IPTABLES, &["-t", table, "-I", parent, "1", "-j", chain])
 }
 
-pub fn validate_mappings(mappings: &[PortMapping]) -> io::Result<()> {
+pub(crate) fn validate_mappings(mappings: &[PortMapping]) -> io::Result<()> {
     let mut host_ports = BTreeSet::new();
     for mapping in mappings {
         if mapping.host_port == 0
@@ -110,7 +111,7 @@ pub fn validate_mappings(mappings: &[PortMapping]) -> io::Result<()> {
     Ok(())
 }
 
-pub fn add_mappings(address: &str, mappings: &[PortMapping]) -> io::Result<()> {
+pub(crate) fn add_mappings(address: &str, mappings: &[PortMapping]) -> io::Result<()> {
     validate_mappings(mappings)?;
     let mut installed = Vec::new();
     for mapping in mappings {
@@ -125,7 +126,7 @@ pub fn add_mappings(address: &str, mappings: &[PortMapping]) -> io::Result<()> {
     Ok(())
 }
 
-pub fn delete_mappings(address: &str, mappings: &[PortMapping]) -> io::Result<()> {
+pub(crate) fn delete_mappings(address: &str, mappings: &[PortMapping]) -> io::Result<()> {
     for mapping in mappings {
         delete_mapping(address, mapping)?;
     }
@@ -141,7 +142,7 @@ fn mapping_rule<'a>(protocol: &'a str, host: &'a str, destination: &'a str) -> [
         PREROUTING_CHAIN,
         "!",
         "-i",
-        crate::network::BRIDGE_NAME,
+        BRIDGE_NAME,
         "-p",
         protocol,
         "--dport",

@@ -10,33 +10,33 @@ use std::path::PathBuf;
 const MAX_STATE_SIZE: u64 = 64 * 1024;
 
 #[derive(Clone, Deserialize, Serialize)]
-pub struct WorkloadRecord {
-    pub workload_name: String,
-    pub instance_name: String,
-    pub network_name: String,
-    pub host_interface: String,
-    pub interface_name: String,
-    pub ip_address: String,
-    pub gateway: String,
+pub(crate) struct WorkloadRecord {
+    pub(crate) workload_name: String,
+    pub(crate) instance_name: String,
+    pub(crate) network_name: String,
+    pub(crate) host_interface: String,
+    pub(crate) interface_name: String,
+    pub(crate) ip_address: String,
+    pub(crate) gateway: String,
     #[serde(default)]
-    pub vlan_id: u32,
+    pub(crate) vlan_id: u32,
     #[serde(default)]
-    pub port_mappings: Vec<PortMapping>,
+    pub(crate) port_mappings: Vec<PortMapping>,
 }
 
 #[derive(Clone)]
-pub struct StateStore {
+pub(crate) struct StateStore {
     directory: PathBuf,
 }
 
 impl StateStore {
-    pub fn new(directory: impl Into<PathBuf>) -> Self {
+    pub(crate) fn new(directory: impl Into<PathBuf>) -> Self {
         Self {
             directory: directory.into(),
         }
     }
 
-    pub fn load(
+    pub(crate) fn load(
         &self,
         workload: &str,
         instance: &str,
@@ -51,7 +51,7 @@ impl StateStore {
         read_record(file).map(Some)
     }
 
-    pub fn save(&self, record: &WorkloadRecord) -> io::Result<()> {
+    pub(crate) fn save(&self, record: &WorkloadRecord) -> io::Result<()> {
         std::fs::create_dir_all(&self.directory)?;
         std::fs::set_permissions(&self.directory, std::fs::Permissions::from_mode(0o700))?;
         let mut temporary = tempfile::NamedTempFile::new_in(&self.directory)?;
@@ -71,14 +71,14 @@ impl StateStore {
         File::open(&self.directory)?.sync_all()
     }
 
-    pub fn path(&self, workload: &str, instance: &str, network: &str) -> PathBuf {
+    pub(crate) fn path(&self, workload: &str, instance: &str, network: &str) -> PathBuf {
         self.directory.join(format!(
             "{}.json",
             stable_id(&[workload, instance, network])
         ))
     }
 
-    pub fn delete(&self, workload: &str, instance: &str, network: &str) -> io::Result<bool> {
+    pub(crate) fn delete(&self, workload: &str, instance: &str, network: &str) -> io::Result<bool> {
         match std::fs::remove_file(self.path(workload, instance, network)) {
             Ok(()) => {
                 File::open(&self.directory)?.sync_all()?;
@@ -89,7 +89,7 @@ impl StateStore {
         }
     }
 
-    pub fn port_is_used(&self, protocol: i32, host_port: u32) -> io::Result<bool> {
+    pub(crate) fn port_is_used(&self, protocol: i32, host_port: u32) -> io::Result<bool> {
         let entries = match std::fs::read_dir(&self.directory) {
             Ok(entries) => entries,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
@@ -126,7 +126,7 @@ fn read_record(file: File) -> io::Result<WorkloadRecord> {
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
-pub fn stable_id(parts: &[&str]) -> String {
+pub(crate) fn stable_id(parts: &[&str]) -> String {
     let mut hasher = Sha256::new();
     for part in parts {
         hasher.update((part.len() as u64).to_be_bytes());

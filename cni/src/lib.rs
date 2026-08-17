@@ -1,9 +1,14 @@
-pub mod firewall;
-pub mod handler;
-pub mod ip_pool;
-pub mod network;
-pub mod overlay;
-pub mod state;
+mod bridge;
+mod firewall;
+mod handler;
+mod ip_pool;
+mod network;
+mod overlay;
+mod state;
+mod system;
+
+#[cfg(test)]
+mod tests;
 
 use handler::CniRpcService;
 use proto::cni::v1::cni_service_server::CniServiceServer;
@@ -20,7 +25,7 @@ const SOCKET_PATH: &str = "/run/barenetes/cni.sock";
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Built first: an invalid node configuration must fail before anything is created.
     let pool = ip_pool()?;
-    network::ensure_bridge()?;
+    bridge::ensure()?;
     overlay::ensure_overlay()?;
     firewall::ensure_egress()?;
     let listener = bind_socket(Path::new(SOCKET_PATH))?;
@@ -47,7 +52,7 @@ fn ip_pool() -> io::Result<ip_pool::IpPool> {
     )
 }
 
-pub fn bind_socket(path: &Path) -> io::Result<UnixListener> {
+pub(crate) fn bind_socket(path: &Path) -> io::Result<UnixListener> {
     let parent = path
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "socket has no parent"))?;
@@ -60,7 +65,7 @@ pub fn bind_socket(path: &Path) -> io::Result<UnixListener> {
     Ok(listener)
 }
 
-pub fn remove_socket(path: &Path) -> io::Result<()> {
+pub(crate) fn remove_socket(path: &Path) -> io::Result<()> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_socket() => std::fs::remove_file(path),
         Ok(_) => Err(io::Error::new(
