@@ -58,6 +58,12 @@ message AddWorkloadNetworkRequest {
 
   // Dedicated tenant network to use.
   NetworkRef network = 2;
+
+  // Network namespace of the workload, restricted to /proc/<pid>/ns/net.
+  string netns_path = 3;
+
+  // Interface name inside the workload network namespace.
+  string interface_name = 4;
 }
 
 message AddWorkloadNetworkResponse {

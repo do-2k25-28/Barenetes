@@ -1,6 +1,7 @@
 mod handler;
-pub mod ip_pool;
+mod ip_pool;
 mod network;
+mod state;
 
 use handler::CniRpcService;
 use proto::cni::v1::cni_service_server::CniServiceServer;
@@ -19,7 +20,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = bind_socket(Path::new(SOCKET_PATH))?;
 
     let result = Server::builder()
-        .add_service(CniServiceServer::new(CniRpcService))
+        .add_service(CniServiceServer::new(CniRpcService::new(
+            ip_pool::IpPool::new(
+                "/var/lib/barenetes/cni",
+                "10.244.0.2".parse()?,
+                "10.244.255.254".parse()?,
+            )?,
+            state::StateStore::new(Path::new("/var/lib/barenetes/cni/workloads")),
+        )))
         .serve_with_incoming_shutdown(UnixListenerStream::new(listener), shutdown_signal())
         .await;
 
