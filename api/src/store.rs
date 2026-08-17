@@ -12,6 +12,9 @@ const EVENT_CHANNEL_CAPACITY: usize = 128;
 ///
 /// Pods are keyed by (namespace, name)
 /// Nodes are keyed by name alone (no namespace field on Node).
+/// TODO: `allow(dead_code)` is temporary, just for scaffolding purposes to allow
+/// handlers to have empty bodies
+#[allow(dead_code)]
 pub struct Store {
     pods: RwLock<HashMap<(String, String), PodDetail>>,
     nodes: RwLock<HashMap<String, Node>>,
@@ -21,6 +24,7 @@ pub struct Store {
     desired_state_channels: RwLock<HashMap<String, broadcast::Sender<WatchDesiredStateEvent>>>,
 }
 
+#[allow(dead_code)]
 impl Store {
     pub fn new() -> Self {
         Self {
