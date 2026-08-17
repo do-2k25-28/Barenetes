@@ -1,3 +1,5 @@
+mod handlers;
+mod service;
 mod store;
 
 fn main() {
