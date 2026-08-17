@@ -1,11 +1,13 @@
 mod handler;
 mod ip_pool;
 mod network;
+mod overlay;
 mod state;
 
 use handler::CniRpcService;
 use proto::cni::v1::cni_service_server::CniServiceServer;
 use std::io;
+use std::net::Ipv4Addr;
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::path::Path;
 use tokio::net::UnixListener;
@@ -16,16 +18,15 @@ const SOCKET_PATH: &str = "/run/barenetes/cni.sock";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Built first: an invalid node configuration must fail before anything is created.
+    let pool = ip_pool()?;
     network::ensure_bridge()?;
+    overlay::ensure_overlay()?;
     let listener = bind_socket(Path::new(SOCKET_PATH))?;
 
     let result = Server::builder()
         .add_service(CniServiceServer::new(CniRpcService::new(
-            ip_pool::IpPool::new(
-                "/var/lib/barenetes/cni",
-                "10.244.0.2".parse()?,
-                "10.244.255.254".parse()?,
-            )?,
+            pool,
             state::StateStore::new(Path::new("/var/lib/barenetes/cni/workloads")),
         )))
         .serve_with_incoming_shutdown(UnixListenerStream::new(listener), shutdown_signal())
@@ -34,6 +35,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     remove_socket(Path::new(SOCKET_PATH))?;
     result?;
     Ok(())
+}
+
+fn ip_pool() -> io::Result<ip_pool::IpPool> {
+    let node_id = overlay::node_id()?;
+    ip_pool::IpPool::new(
+        "/var/lib/barenetes/cni",
+        Ipv4Addr::new(10, 244, node_id, 2),
+        Ipv4Addr::new(10, 244, node_id, 254),
+    )
 }
 
 fn bind_socket(path: &Path) -> io::Result<UnixListener> {

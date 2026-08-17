@@ -1,5 +1,8 @@
 use crate::ip_pool::IpPool;
+use std::fs::File;
 use std::io;
+use std::os::unix::fs::MetadataExt;
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -27,6 +30,7 @@ pub fn add_workload_network(
     state: &StateStore,
 ) -> io::Result<WorkloadNetwork> {
     let (workload, network, pid, interface) = validate_add_request(&request)?;
+    let netns = open_netns(&request.netns_path)?;
     if let Some(record) = state.load(
         &workload.workload_name,
         &workload.instance_name,
@@ -53,47 +57,58 @@ pub fn add_workload_network(
     let peer_interface = format!("p{}", &host_interface[1..]);
     let address_with_prefix = format!("{address}/16");
     let pid_string = pid.to_string();
+    let interface_mtu = mtu()?.to_string();
 
     let setup = (|| {
-        run_system(
+        run(
             IP,
             &[
                 "link",
                 "add",
                 &host_interface,
+                "mtu",
+                &interface_mtu,
                 "type",
                 "veth",
                 "peer",
                 "name",
                 &peer_interface,
+                "mtu",
+                &interface_mtu,
             ],
         )?;
-        run_system(IP, &["link", "set", &peer_interface, "netns", &pid_string])?;
+        if !netns_matches(&netns, pid)? {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "netns_path no longer refers to the requested namespace",
+            ));
+        }
+        run(IP, &["link", "set", &peer_interface, "netns", &pid_string])?;
         run_in_namespace(
-            pid,
+            &netns,
             &["link", "set", "dev", &peer_interface, "name", interface],
         )?;
         run_in_namespace(
-            pid,
+            &netns,
             &["address", "replace", &address_with_prefix, "dev", interface],
         )?;
-        run_in_namespace(pid, &["link", "set", "dev", interface, "up"])?;
-        run_in_namespace(pid, &["link", "set", "dev", "lo", "up"])?;
+        run_in_namespace(&netns, &["link", "set", "dev", interface, "up"])?;
+        run_in_namespace(&netns, &["link", "set", "dev", "lo", "up"])?;
         run_in_namespace(
-            pid,
+            &netns,
             &[
                 "route", "replace", "default", "via", GATEWAY, "dev", interface,
             ],
         )?;
-        run_system(
+        run(
             IP,
             &["link", "set", "dev", &host_interface, "master", BRIDGE_NAME],
         )?;
-        run_system(IP, &["link", "set", "dev", &host_interface, "up"])
+        run(IP, &["link", "set", "dev", &host_interface, "up"])
     })();
 
     if let Err(error) = setup {
-        let _ = run_system(IP, &["link", "delete", &host_interface]);
+        let _ = run(IP, &["link", "delete", &host_interface]);
         let _ = pool.release(address);
         return Err(error);
     }
@@ -108,7 +123,7 @@ pub fn add_workload_network(
         gateway: GATEWAY.to_owned(),
     };
     if let Err(error) = state.save(&record) {
-        let _ = run_system(IP, &["link", "delete", &record.host_interface]);
+        let _ = run(IP, &["link", "delete", &record.host_interface]);
         let _ = pool.release(address);
         return Err(error);
     }
@@ -151,7 +166,7 @@ pub fn delete_workload_network(
         return Ok(true);
     };
     if succeeds(IP, &["link", "show", "dev", &record.host_interface])? {
-        run_system(IP, &["link", "delete", &record.host_interface])?;
+        run(IP, &["link", "delete", &record.host_interface])?;
     }
     let address = record
         .ip_address
@@ -162,7 +177,9 @@ pub fn delete_workload_network(
         &workload.instance_name,
         &network.network_name,
     )?;
-    pool.release(address)?;
+    if let Err(error) = pool.release(address) {
+        eprintln!("cni: failed to release {address}: {error}");
+    }
     Ok(true)
 }
 
@@ -257,17 +274,37 @@ fn validate_name(value: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn run_system(program: &str, arguments: &[&str]) -> io::Result<()> {
-    run(program, arguments)
+fn open_netns(path: &str) -> io::Result<File> {
+    let file = File::open(path)?;
+    let namespace = file.metadata()?;
+    let host = std::fs::metadata("/proc/self/ns/net")?;
+    if (namespace.dev(), namespace.ino()) == (host.dev(), host.ino()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "netns_path refers to the host network namespace",
+        ));
+    }
+    if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFD, 0) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(file)
 }
 
-fn run_in_namespace(pid: u32, arguments: &[&str]) -> io::Result<()> {
-    let target = format!("--net=/proc/{pid}/ns/net");
+fn netns_matches(netns: &File, pid: u32) -> io::Result<bool> {
+    let expected = netns.metadata()?;
+    let actual = std::fs::metadata(format!("/proc/{pid}/ns/net"))?;
+    Ok((expected.dev(), expected.ino()) == (actual.dev(), actual.ino()))
+}
+
+fn run_in_namespace(netns: &File, arguments: &[&str]) -> io::Result<()> {
+    let target = format!("--net=/proc/self/fd/{}", netns.as_raw_fd());
     let ip = resolve(IP)?;
-    let ip = ip.to_string_lossy();
-    let mut command_arguments = vec![target.as_str(), "--", ip.as_ref()];
+    let ip = ip
+        .to_str()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "ip path is not valid UTF-8"))?;
+    let mut command_arguments = vec![target.as_str(), "--", ip];
     command_arguments.extend_from_slice(arguments);
-    run_system(NSENTER, &command_arguments)
+    run(NSENTER, &command_arguments)
 }
 
 fn record_to_network(record: &WorkloadRecord) -> WorkloadNetwork {
