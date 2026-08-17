@@ -1,11 +1,11 @@
+pub mod agent {
+    pub mod v1 {
+        tonic::include_proto!("agent.v1");
+    }
+}
+
 // Commented out because these proto files are currently empty stubs.
 
-// pub mod agent {
-//     pub mod v1 {
-//         tonic::include_proto!("agent.v1");
-//     }
-// }
-//
 // pub mod api {
 //     pub mod v1 {
 //         tonic::include_proto!("api.v1");
