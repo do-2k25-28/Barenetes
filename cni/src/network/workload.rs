@@ -25,7 +25,7 @@ pub(crate) fn add_workload_network(
 ) -> io::Result<WorkloadNetwork> {
     let (workload, network, pid, interface) = validate_add_request(&request)?;
     let netns = open_netns(&request.netns_path)?;
-    crate::firewall::validate_mappings(&request.port_mappings)?;
+    super::firewall::validate_mappings(&request.port_mappings)?;
     if let Some(record) = state.load(
         &workload.workload_name,
         &workload.instance_name,
@@ -164,13 +164,13 @@ pub(crate) fn add_workload_network(
         vlan_id: network.vlan_id,
         port_mappings: request.port_mappings.clone(),
     };
-    if let Err(error) = crate::firewall::add_mappings(&record.ip_address, &record.port_mappings) {
+    if let Err(error) = super::firewall::add_mappings(&record.ip_address, &record.port_mappings) {
         let _ = run(IP, &["link", "delete", &record.host_interface]);
         let _ = pool.release(address);
         return Err(error);
     }
     if let Err(error) = state.save(&record) {
-        let _ = crate::firewall::delete_mappings(&record.ip_address, &record.port_mappings);
+        let _ = super::firewall::delete_mappings(&record.ip_address, &record.port_mappings);
         let _ = run(IP, &["link", "delete", &record.host_interface]);
         let _ = pool.release(address);
         return Err(error);
@@ -216,7 +216,7 @@ pub(crate) fn delete_workload_network(
     if succeeds(IP, &["link", "show", "dev", &record.host_interface])? {
         run(IP, &["link", "delete", &record.host_interface])?;
     }
-    crate::firewall::delete_mappings(&record.ip_address, &record.port_mappings)?;
+    super::firewall::delete_mappings(&record.ip_address, &record.port_mappings)?;
     let address = record
         .ip_address
         .parse()

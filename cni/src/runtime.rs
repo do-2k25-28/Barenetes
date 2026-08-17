@@ -1,7 +1,8 @@
+mod handler;
 mod socket;
 
-use crate::handler::CniRpcService;
-use crate::{firewall, network, state};
+use crate::{network, state};
+use handler::CniRpcService;
 use proto::cni::v1::cni_service_server::CniServiceServer;
 use std::io;
 use std::net::Ipv4Addr;
@@ -13,7 +14,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let pool = ip_pool()?;
     network::ensure_bridge()?;
     network::ensure_overlay()?;
-    firewall::ensure_egress()?;
+    network::ensure_egress()?;
     let listener = socket::bind(Path::new("/run/barenetes/cni.sock"))?;
 
     let result = Server::builder()
