@@ -18,6 +18,8 @@ use tonic::transport::Server;
 const SOCKET_PATH: &str = "/run/barenetes/cni.sock";
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    // Built first: an invalid node configuration must fail before anything is created.
+    let pool = ip_pool()?;
     network::ensure_bridge()?;
     overlay::ensure_overlay()?;
     firewall::ensure_egress()?;
@@ -25,7 +27,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let result = Server::builder()
         .add_service(CniServiceServer::new(CniRpcService::new(
-            ip_pool()?,
+            pool,
             state::StateStore::new(Path::new("/var/lib/barenetes/cni/workloads")),
         )))
         .serve_with_incoming_shutdown(UnixListenerStream::new(listener), shutdown_signal())
