@@ -22,6 +22,9 @@ message WorkloadRef {
 message NetworkRef {
   // Readable name for the network.
   string network_name = 1;
+
+  // Explicit bridge VLAN used to isolate this tenant (1-4094).
+  uint32 vlan_id = 2;
 }
 
 //===================// WorkloadNetwork struct and states //===================//

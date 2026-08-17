@@ -13,6 +13,7 @@ use proto::cni::v1::{
 };
 
 const IP: &str = "ip";
+const BRIDGE: &str = "bridge";
 pub const BRIDGE_NAME: &str = "barenetes0";
 const BRIDGE_ADDRESS: &str = "10.244.0.1/16";
 const GATEWAY: &str = "10.244.0.1";
@@ -36,10 +37,10 @@ pub fn add_workload_network(
         &workload.instance_name,
         &network.network_name,
     )? {
-        if record.interface_name != interface {
+        if record.interface_name != interface || record.vlan_id != network.vlan_id {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "workload network already exists with a different interface",
+                "workload network already exists with different settings",
             ));
         }
         return Ok(record_to_network(&record));
@@ -104,6 +105,25 @@ pub fn add_workload_network(
             IP,
             &["link", "set", "dev", &host_interface, "master", BRIDGE_NAME],
         )?;
+        let vlan = network.vlan_id.to_string();
+        run(
+            BRIDGE,
+            &["vlan", "add", "dev", BRIDGE_NAME, "vid", &vlan, "self"],
+        )?;
+        run(BRIDGE, &["vlan", "del", "dev", &host_interface, "vid", "1"])?;
+        run(
+            BRIDGE,
+            &[
+                "vlan",
+                "add",
+                "dev",
+                &host_interface,
+                "vid",
+                &vlan,
+                "pvid",
+                "untagged",
+            ],
+        )?;
         run(IP, &["link", "set", "dev", &host_interface, "up"])
     })();
 
@@ -121,6 +141,7 @@ pub fn add_workload_network(
         interface_name: interface.to_owned(),
         ip_address: address.to_string(),
         gateway: GATEWAY.to_owned(),
+        vlan_id: network.vlan_id,
     };
     if let Err(error) = state.save(&record) {
         let _ = run(IP, &["link", "delete", &record.host_interface]);
@@ -200,6 +221,12 @@ fn validate_add_request(
         &network.network_name,
     ] {
         validate_name(value)?;
+    }
+    if !(1..=4094).contains(&network.vlan_id) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "network vlan_id must be between 1 and 4094",
+        ));
     }
     let interface = if request.interface_name.is_empty() {
         "eth0"
@@ -338,7 +365,20 @@ pub fn ensure_bridge() -> io::Result<()> {
     )?;
     let mtu = mtu()?.to_string();
     run(IP, &["link", "set", "dev", BRIDGE_NAME, "mtu", &mtu])?;
-    run(IP, &["link", "set", "dev", BRIDGE_NAME, "up"])
+    run(IP, &["link", "set", "dev", BRIDGE_NAME, "up"])?;
+    run(
+        IP,
+        &[
+            "link",
+            "set",
+            "dev",
+            BRIDGE_NAME,
+            "type",
+            "bridge",
+            "vlan_filtering",
+            "1",
+        ],
+    )
 }
 
 pub fn mtu() -> io::Result<u32> {

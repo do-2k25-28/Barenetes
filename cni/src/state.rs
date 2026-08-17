@@ -17,6 +17,8 @@ pub struct WorkloadRecord {
     pub interface_name: String,
     pub ip_address: String,
     pub gateway: String,
+    #[serde(default)]
+    pub vlan_id: u32,
 }
 
 #[derive(Clone)]
