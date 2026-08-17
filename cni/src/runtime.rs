@@ -1,4 +1,3 @@
-#[path = "runtime/socket.rs"]
 mod socket;
 
 use crate::handler::CniRpcService;

@@ -4,6 +4,28 @@ use std::process::{Command, Stdio};
 
 const TOOL_DIRECTORIES: &[&str] = &["/usr/sbin", "/sbin", "/usr/bin", "/bin"];
 
+// Leaves room for the 50 bytes of VXLAN encapsulation.
+const DEFAULT_MTU: u32 = 1450;
+
+pub(crate) fn mtu() -> io::Result<u32> {
+    let Some(value) = std::env::var("BARENETES_MTU")
+        .ok()
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(DEFAULT_MTU);
+    };
+    value
+        .parse()
+        .ok()
+        .filter(|mtu| (576..=9000).contains(mtu))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "BARENETES_MTU must be between 576 and 9000",
+            )
+        })
+}
+
 pub(crate) fn succeeds(program: &str, arguments: &[&str]) -> io::Result<bool> {
     Command::new(resolve(program)?)
         .args(arguments)

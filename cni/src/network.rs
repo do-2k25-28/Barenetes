@@ -1,10 +1,6 @@
-#[path = "network/bridge.rs"]
 mod bridge;
-#[path = "network/overlay.rs"]
 mod overlay;
-#[path = "network/system.rs"]
 mod system;
-#[path = "network/workload.rs"]
 mod workload;
 
 pub(crate) use bridge::{BRIDGE_NAME, ensure as ensure_bridge};

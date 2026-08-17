@@ -42,7 +42,7 @@ pub(crate) fn ensure_overlay() -> io::Result<()> {
         IP,
         &["link", "set", "dev", VXLAN, "master", bridge::BRIDGE_NAME],
     )?;
-    let mtu = bridge::mtu()?.to_string();
+    let mtu = system::mtu()?.to_string();
     system::run(IP, &["link", "set", "dev", VXLAN, "mtu", &mtu])?;
     system::run(IP, &["link", "set", "dev", VXLAN, "up"])?;
     system::run(BRIDGE, &["vlan", "add", "dev", VXLAN, "vid", "1-4094"])?;

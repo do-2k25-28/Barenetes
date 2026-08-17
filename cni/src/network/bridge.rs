@@ -1,11 +1,10 @@
 use std::io;
 
-use super::system::{run, succeeds};
+use super::system::{mtu, run, succeeds};
 
 const IP: &str = "ip";
 pub(crate) const BRIDGE_NAME: &str = "barenetes0";
 const BRIDGE_ADDRESS: &str = "10.244.0.1/16";
-const DEFAULT_MTU: u32 = 1450;
 
 pub(crate) fn ensure() -> io::Result<()> {
     if unsafe { libc::geteuid() } != 0 {
@@ -40,23 +39,4 @@ pub(crate) fn ensure() -> io::Result<()> {
             "1",
         ],
     )
-}
-
-pub(crate) fn mtu() -> io::Result<u32> {
-    let Some(value) = std::env::var("BARENETES_MTU")
-        .ok()
-        .filter(|value| !value.is_empty())
-    else {
-        return Ok(DEFAULT_MTU);
-    };
-    value
-        .parse()
-        .ok()
-        .filter(|mtu| (576..=9000).contains(mtu))
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "BARENETES_MTU must be between 576 and 9000",
-            )
-        })
 }

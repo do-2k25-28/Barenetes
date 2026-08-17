@@ -5,8 +5,7 @@ use std::os::unix::fs::MetadataExt;
 use std::os::unix::io::AsRawFd;
 
 use super::bridge;
-use super::bridge::mtu;
-use super::system::{self, run, succeeds};
+use super::system::{self, mtu, run, succeeds};
 
 use crate::state::{StateStore, WorkloadRecord, stable_id};
 use proto::cni::v1::{
