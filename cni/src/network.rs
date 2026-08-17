@@ -4,7 +4,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::state::{StateStore, WorkloadRecord, stable_id};
-use proto::cni::v1::{AddWorkloadNetworkRequest, NetworkRef, WorkloadNetwork, WorkloadRef};
+use proto::cni::v1::{
+    AddWorkloadNetworkRequest, DeleteWorkloadNetworkRequest, GetWorkloadNetworkRequest, NetworkRef,
+    NetworkState, WorkloadNetwork, WorkloadRef,
+};
 
 const IP: &str = "ip";
 pub const BRIDGE_NAME: &str = "barenetes0";
@@ -112,6 +115,57 @@ pub fn add_workload_network(
     Ok(record_to_network(&record))
 }
 
+pub fn get_workload_network(
+    request: GetWorkloadNetworkRequest,
+    state: &StateStore,
+) -> io::Result<WorkloadNetwork> {
+    let (workload, network) = validate_refs(request.workload.as_ref(), request.network.as_ref())?;
+    let record = state
+        .load(
+            &workload.workload_name,
+            &workload.instance_name,
+            &network.network_name,
+        )?
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "workload network does not exist")
+        })?;
+    let mut result = record_to_network(&record);
+    if !succeeds(IP, &["link", "show", "dev", &record.host_interface])? {
+        result.state = NetworkState::Error as i32;
+    }
+    Ok(result)
+}
+
+pub fn delete_workload_network(
+    request: DeleteWorkloadNetworkRequest,
+    pool: &IpPool,
+    state: &StateStore,
+) -> io::Result<bool> {
+    let (workload, network) = validate_refs(request.workload.as_ref(), request.network.as_ref())?;
+    let Some(record) = state.load(
+        &workload.workload_name,
+        &workload.instance_name,
+        &network.network_name,
+    )?
+    else {
+        return Ok(true);
+    };
+    if succeeds(IP, &["link", "show", "dev", &record.host_interface])? {
+        run_system(IP, &["link", "delete", &record.host_interface])?;
+    }
+    let address = record
+        .ip_address
+        .parse()
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "stored IP address is invalid"))?;
+    state.delete(
+        &workload.workload_name,
+        &workload.instance_name,
+        &network.network_name,
+    )?;
+    pool.release(address)?;
+    Ok(true)
+}
+
 fn validate_add_request(
     request: &AddWorkloadNetworkRequest,
 ) -> io::Result<(&WorkloadRef, &NetworkRef, u32, &str)> {
@@ -170,6 +224,24 @@ fn validate_add_request(
     Ok((workload, network, pid, interface))
 }
 
+fn validate_refs<'a>(
+    workload: Option<&'a WorkloadRef>,
+    network: Option<&'a NetworkRef>,
+) -> io::Result<(&'a WorkloadRef, &'a NetworkRef)> {
+    let workload = workload
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "workload is required"))?;
+    let network = network
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "network is required"))?;
+    for value in [
+        &workload.workload_name,
+        &workload.instance_name,
+        &network.network_name,
+    ] {
+        validate_name(value)?;
+    }
+    Ok((workload, network))
+}
+
 fn validate_name(value: &str) -> io::Result<()> {
     if value.is_empty()
         || value.len() > 63
@@ -200,7 +272,7 @@ fn run_in_namespace(pid: u32, arguments: &[&str]) -> io::Result<()> {
 
 fn record_to_network(record: &WorkloadRecord) -> WorkloadNetwork {
     WorkloadNetwork {
-        state: proto::cni::v1::NetworkState::Ready as i32,
+        state: NetworkState::Ready as i32,
         interface_name: record.interface_name.clone(),
         ip_address: record.ip_address.clone(),
         gateway: record.gateway.clone(),
