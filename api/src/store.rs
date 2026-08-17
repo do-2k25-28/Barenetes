@@ -137,3 +137,108 @@ fn pod_key(pod: &PodDetail) -> (String, String) {
         .unwrap_or_default();
     (namespace, name)
 }
+
+#[cfg(test)]
+mod tests {
+    use proto::api::v1::watch_desired_state_event;
+    use proto::shared::v1::{NodeStatus, Pod, PodSpec, PodStatus, PodWithSpec};
+
+    use super::*;
+
+    fn get_pod_detail(namespace: &str, name: &str) -> PodDetail {
+        PodDetail {
+            core: Some(PodWithSpec {
+                pod: Some(Pod {
+                    name: name.to_string(),
+                    status: PodStatus::Pending as i32,
+                    requests: None,
+                    limits: None,
+                }),
+                spec: Some(PodSpec {
+                    namespace: namespace.to_string(),
+                    containers: vec![],
+                }),
+            }),
+            container_statuses: vec![],
+            pod_ip: String::new(),
+            message: String::new(),
+            resource_usage: None,
+            node_name: String::new(),
+        }
+    }
+
+    fn get_node(name: &str, status: NodeStatus) -> Node {
+        Node {
+            name: name.to_string(),
+            status: status as i32,
+            capacity: None,
+            allocatable: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_upsert_and_get_pod() {
+        let store = Store::new();
+        let pod = get_pod_detail("default", "my-pod");
+
+        store.upsert_pod(pod.clone()).await;
+
+        assert_eq!(store.get_pod("default", "my-pod").await, Some(pod));
+    }
+
+    #[tokio::test]
+    async fn test_get_pod_missing_returns_none() {
+        let store = Store::new();
+
+        assert_eq!(store.get_pod("default", "does-not-exist").await, None);
+    }
+
+    #[tokio::test]
+    async fn test_upsert_node_replaces_existing() {
+        let store = Store::new();
+        store
+            .upsert_node(get_node("node-1", NodeStatus::Ready))
+            .await;
+
+        store
+            .upsert_node(get_node("node-1", NodeStatus::NotReady))
+            .await;
+
+        let nodes = store.list_nodes().await;
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].status, NodeStatus::NotReady as i32);
+    }
+
+    fn get_desired_state_event(
+        action: watch_desired_state_event::Action,
+    ) -> WatchDesiredStateEvent {
+        WatchDesiredStateEvent {
+            action: action as i32,
+            pod: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_desired_state_events_are_scoped_per_node() {
+        let store = Store::new();
+        let mut node_a = store.subscribe_desired_state_events("node-a").await;
+        let mut node_b = store.subscribe_desired_state_events("node-b").await;
+
+        store
+            .publish_desired_state_event(
+                "node-a",
+                get_desired_state_event(watch_desired_state_event::Action::Run),
+            )
+            .await;
+
+        let event = node_a
+            .try_recv()
+            .expect("node-a should have received its own event");
+        assert_eq!(event.action, watch_desired_state_event::Action::Run as i32);
+
+        assert!(
+            node_b.try_recv().is_err(),
+            "node-b should not receive an event published to node-a"
+        );
+    }
+}
