@@ -23,6 +23,9 @@ pub type NodeEventStream =
 pub type DesiredStateEventStream =
     Pin<Box<dyn Stream<Item = Result<WatchDesiredStateEvent, Status>> + Send + 'static>>;
 
+// `allow(dead_code)` is temporary: no handler reads `self.store` yet since they're all `todo!()`
+// stubs. Remove once a track's handlers actually use it.
+#[allow(dead_code)]
 pub struct ApiService {
     pub store: Arc<Store>,
 }
