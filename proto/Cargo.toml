@@ -11,4 +11,5 @@ tonic = "0.14.6"
 tonic-prost = "0.14.6"
 
 [build-dependencies]
+protoc-bin-vendored = "3.2.0"
 tonic-prost-build = "0.14.6"

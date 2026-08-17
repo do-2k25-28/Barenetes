@@ -2,6 +2,13 @@ syntax = "proto3";
 
 package cni.v1;
 
+// Local RPC interface exposed by the CNI daemon to the node agent.
+service CniService {
+  rpc AddWorkloadNetwork(AddWorkloadNetworkRequest) returns (AddWorkloadNetworkResponse);
+  rpc DeleteWorkloadNetwork(DeleteWorkloadNetworkRequest) returns (DeleteWorkloadNetworkResponse);
+  rpc GetWorkloadNetwork(GetWorkloadNetworkRequest) returns (GetWorkloadNetworkResponse);
+}
+
 // Identifies the workload instance that the agent is referring to.
 message WorkloadRef {
   // Readable name for the workload.
@@ -86,27 +93,4 @@ message GetWorkloadNetworkRequest {
 message GetWorkloadNetworkResponse {
   // Network state for the requested workload instance.
   WorkloadNetwork network = 1;
-}
-
-// Request sent by the node agent to the CNI binary.
-message CniRequest {
-  oneof request {
-    AddWorkloadNetworkRequest add_workload_network = 1;
-    DeleteWorkloadNetworkRequest delete_workload_network = 2;
-    GetWorkloadNetworkRequest get_workload_network = 3;
-  }
-}
-
-// Response returned by the CNI binary to the node agent.
-message CniResponse {
-  oneof response {
-    AddWorkloadNetworkResponse add_workload_network = 1;
-    DeleteWorkloadNetworkResponse delete_workload_network = 2;
-    GetWorkloadNetworkResponse get_workload_network = 3;
-    CniError error = 4;
-  }
-}
-
-message CniError {
-  string message = 1;
 }

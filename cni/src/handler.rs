@@ -1,29 +1,39 @@
-#![allow(dead_code)]
-
 use proto::cni::v1::{
-    AddWorkloadNetworkRequest, CniResponse, DeleteWorkloadNetworkRequest, GetWorkloadNetworkRequest,
+    AddWorkloadNetworkRequest, AddWorkloadNetworkResponse, DeleteWorkloadNetworkRequest,
+    DeleteWorkloadNetworkResponse, GetWorkloadNetworkRequest, GetWorkloadNetworkResponse,
+    cni_service_server::CniService,
 };
+use tonic::{Request, Response, Status};
 
-pub trait NetworkHandler {
-    fn add_workload_network(&self, request: AddWorkloadNetworkRequest) -> CniResponse;
+#[derive(Default)]
+pub struct CniRpcService;
 
-    fn delete_workload_network(&self, request: DeleteWorkloadNetworkRequest) -> CniResponse;
-
-    fn get_workload_network(&self, request: GetWorkloadNetworkRequest) -> CniResponse;
-}
-
-pub struct EmptyNetworkHandler;
-
-impl NetworkHandler for EmptyNetworkHandler {
-    fn add_workload_network(&self, _request: AddWorkloadNetworkRequest) -> CniResponse {
-        todo!("Implement workload network creation")
+#[tonic::async_trait]
+impl CniService for CniRpcService {
+    async fn add_workload_network(
+        &self,
+        _request: Request<AddWorkloadNetworkRequest>,
+    ) -> Result<Response<AddWorkloadNetworkResponse>, Status> {
+        Err(Status::unimplemented(
+            "workload network creation is not implemented",
+        ))
     }
 
-    fn delete_workload_network(&self, _request: DeleteWorkloadNetworkRequest) -> CniResponse {
-        todo!("Implement workload network deletion")
+    async fn delete_workload_network(
+        &self,
+        _request: Request<DeleteWorkloadNetworkRequest>,
+    ) -> Result<Response<DeleteWorkloadNetworkResponse>, Status> {
+        Err(Status::unimplemented(
+            "workload network deletion is not implemented",
+        ))
     }
 
-    fn get_workload_network(&self, _request: GetWorkloadNetworkRequest) -> CniResponse {
-        todo!("Implement workload network lookup")
+    async fn get_workload_network(
+        &self,
+        _request: Request<GetWorkloadNetworkRequest>,
+    ) -> Result<Response<GetWorkloadNetworkResponse>, Status> {
+        Err(Status::unimplemented(
+            "workload network lookup is not implemented",
+        ))
     }
 }
