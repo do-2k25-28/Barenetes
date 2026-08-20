@@ -5,29 +5,29 @@ package agent.v1;
 import "shared/v1/pod.proto";
 
 service Kubelet {
-    // Create or update the desired state of a pod
-    rpc ApplyPod(ApplyPodRequest) returns (ApplyPodResponse);
-    rpc DeletePod(DeletePodRequest) returns (DeletePodResponse);
+  // Create or update the desired state of a pod
+  rpc ApplyPod(ApplyPodRequest) returns (ApplyPodResponse);
+  rpc DeletePod(DeletePodRequest) returns (DeletePodResponse);
 }
 
 message ApplyPodRequest {
-    shared.v1.PodWithSpec pod = 1;
+  shared.v1.PodWithSpec pod = 1;
 }
 
 message ApplyPodResponse {
-    string pod_id = 1;
+  string pod_id = 1;
 }
 
 message DeletePodRequest {
-    string pod_id = 1;
+  string pod_id = 1;
 
-    // Time to wait before force killing containers
-    optional uint32 grace_period_seconds = 2;
+  // Time to wait before force killing containers
+  optional uint32 grace_period_seconds = 2;
 
-    // Skip graceful shutdown
-    bool force = 3;
+  // Skip graceful shutdown
+  bool force = 3;
 }
 
 message DeletePodResponse {
-    bool success = 1;
+  bool success = 1;
 }
