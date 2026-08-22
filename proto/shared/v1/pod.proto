@@ -39,4 +39,5 @@ message PodDetail {
   string message = 4;
   Resources resource_usage = 5;
   string node_name = 6;
+  optional string unschedulable_reason = 7;
 }
