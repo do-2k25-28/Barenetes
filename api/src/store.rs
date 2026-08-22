@@ -1,10 +1,19 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use proto::api::v1::{WatchDesiredStateEvent, WatchNodeEvent, WatchPodEvent};
-use proto::shared::v1::{Node, PodDetail};
+use proto::shared::v1::{EventType, Node, NodeStatus, PodDetail};
 use tokio::sync::{RwLock, broadcast};
+use tokio::time::Instant;
 
 const EVENT_CHANNEL_CAPACITY: usize = 128;
+
+/// Expected interval between UpdateNodeStatus heartbeats from a live agent.
+pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
+/// A node is considered stale after this many missed heartbeats.
+pub const HEARTBEAT_TIMEOUT_MULTIPLIER: u32 = 3;
+pub const NODE_STALE_TIMEOUT: Duration =
+    Duration::from_secs(HEARTBEAT_INTERVAL.as_secs() * HEARTBEAT_TIMEOUT_MULTIPLIER as u64);
 
 /// TODO: currently in-memory only for now, will need replacing with a database
 // (etcd may be overkill for the minimal version we are trying to achieve,
@@ -18,6 +27,7 @@ const EVENT_CHANNEL_CAPACITY: usize = 128;
 pub struct Store {
     pods: RwLock<HashMap<(String, String), PodDetail>>,
     nodes: RwLock<HashMap<String, Node>>,
+    node_last_seen: RwLock<HashMap<String, Instant>>,
     pod_events: broadcast::Sender<WatchPodEvent>,
     node_events: broadcast::Sender<WatchNodeEvent>,
     // One channel per node, created lazily on first publish/subscribe
@@ -30,6 +40,7 @@ impl Store {
         Self {
             pods: RwLock::new(HashMap::new()),
             nodes: RwLock::new(HashMap::new()),
+            node_last_seen: RwLock::new(HashMap::new()),
             pod_events: broadcast::channel(EVENT_CHANNEL_CAPACITY).0,
             node_events: broadcast::channel(EVENT_CHANNEL_CAPACITY).0,
             desired_state_channels: RwLock::new(HashMap::new()),
@@ -61,8 +72,12 @@ impl Store {
             .remove(&(namespace.to_string(), name.to_string()))
     }
 
-    /// Inserts or replaces a node
+    /// Inserts or replaces a node, and records this call as a liveness heartbeat.
     pub async fn upsert_node(&self, node: Node) {
+        self.node_last_seen
+            .write()
+            .await
+            .insert(node.name.clone(), Instant::now());
         self.nodes.write().await.insert(node.name.clone(), node);
     }
 
@@ -72,6 +87,42 @@ impl Store {
 
     pub async fn list_nodes(&self) -> Vec<Node> {
         self.nodes.read().await.values().cloned().collect()
+    }
+
+    /// Marks any node that hasn't reported a heartbeat within `timeout` as NOT_READY,
+    /// publishing a node MODIFIED event for each newly-stale node. Returns their names.
+    pub async fn sweep_stale_nodes(&self, timeout: Duration) -> Vec<String> {
+        let now = Instant::now();
+        let stale_names: Vec<String> = {
+            let last_seen = self.node_last_seen.read().await;
+            last_seen
+                .iter()
+                .filter(|(_, seen)| now.saturating_duration_since(**seen) > timeout)
+                .map(|(name, _)| name.clone())
+                .collect()
+        };
+
+        let mut newly_stale = Vec::new();
+        {
+            let mut nodes = self.nodes.write().await;
+            for name in &stale_names {
+                if let Some(node) = nodes.get_mut(name)
+                    && node.status != NodeStatus::NotReady as i32
+                {
+                    node.status = NodeStatus::NotReady as i32;
+                    newly_stale.push(node.clone());
+                }
+            }
+        }
+
+        for node in &newly_stale {
+            self.publish_node_event(WatchNodeEvent {
+                event_type: EventType::Modified as i32,
+                node: Some(node.clone()),
+            });
+        }
+
+        newly_stale.into_iter().map(|node| node.name).collect()
     }
 
     // Publish is fire-and-forget: a `send` error just means nobody is subscribed yet,
@@ -243,6 +294,75 @@ mod tests {
         assert!(
             node_b.try_recv().is_err(),
             "node-b should not receive an event published to node-a"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_sweep_stale_nodes_marks_unresponsive_node_not_ready() {
+        let store = Store::new();
+        store
+            .upsert_node(get_node("node-1", NodeStatus::Ready))
+            .await;
+        let mut events = store.subscribe_node_events();
+
+        tokio::time::advance(NODE_STALE_TIMEOUT + Duration::from_secs(1)).await;
+        let stale = store.sweep_stale_nodes(NODE_STALE_TIMEOUT).await;
+
+        assert_eq!(stale, vec!["node-1".to_string()]);
+        let node = store.get_node("node-1").await.unwrap();
+        assert_eq!(node.status, NodeStatus::NotReady as i32);
+        let event = events
+            .try_recv()
+            .expect("a node MODIFIED event should have been published");
+        assert_eq!(event.event_type, EventType::Modified as i32);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_sweep_stale_nodes_leaves_fresh_node_untouched() {
+        let store = Store::new();
+        store
+            .upsert_node(get_node("node-1", NodeStatus::Ready))
+            .await;
+
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let stale = store.sweep_stale_nodes(NODE_STALE_TIMEOUT).await;
+
+        assert!(stale.is_empty());
+        let node = store.get_node("node-1").await.unwrap();
+        assert_eq!(node.status, NodeStatus::Ready as i32);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_upsert_node_refreshes_liveness() {
+        let store = Store::new();
+        store
+            .upsert_node(get_node("node-1", NodeStatus::Ready))
+            .await;
+
+        tokio::time::advance(NODE_STALE_TIMEOUT - Duration::from_secs(1)).await;
+        store
+            .upsert_node(get_node("node-1", NodeStatus::Ready))
+            .await; // heartbeat
+
+        tokio::time::advance(NODE_STALE_TIMEOUT - Duration::from_secs(1)).await;
+        let stale = store.sweep_stale_nodes(NODE_STALE_TIMEOUT).await;
+
+        assert!(stale.is_empty(), "recent heartbeat should keep node fresh");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_sweep_stale_nodes_does_not_report_already_not_ready_node() {
+        let store = Store::new();
+        store
+            .upsert_node(get_node("node-1", NodeStatus::NotReady))
+            .await;
+
+        tokio::time::advance(NODE_STALE_TIMEOUT + Duration::from_secs(1)).await;
+        let stale = store.sweep_stale_nodes(NODE_STALE_TIMEOUT).await;
+
+        assert!(
+            stale.is_empty(),
+            "already-NotReady node shouldn't be reported as newly stale"
         );
     }
 }
