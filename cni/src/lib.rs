@@ -1,3 +1,4 @@
+mod addressing;
 mod ip_pool;
 mod network;
 mod runtime;
