@@ -2,6 +2,7 @@ mod bridge;
 mod firewall;
 mod overlay;
 mod system;
+mod vlan;
 mod workload;
 
 pub(crate) use bridge::{BRIDGE_NAME, ensure as ensure_bridge};
