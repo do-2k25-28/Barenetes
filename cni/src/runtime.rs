@@ -5,13 +5,12 @@ use crate::{network, state};
 use handler::CniRpcService;
 use proto::cni::v1::cni_service_server::CniServiceServer;
 use std::io;
-use std::net::Ipv4Addr;
 use std::path::Path;
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::transport::Server;
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let pool = ip_pool()?;
+    let pools = ip_pool_directory()?;
     network::ensure_bridge()?;
     network::ensure_overlay()?;
     network::ensure_egress()?;
@@ -19,7 +18,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let result = Server::builder()
         .add_service(CniServiceServer::new(CniRpcService::new(
-            pool,
+            pools,
             state::StateStore::new(Path::new("/var/lib/barenetes/cni/workloads")),
         )))
         .serve_with_incoming_shutdown(UnixListenerStream::new(listener), shutdown_signal())
@@ -30,13 +29,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn ip_pool() -> io::Result<crate::ip_pool::IpPool> {
+fn ip_pool_directory() -> io::Result<crate::ip_pool::IpPoolDirectory> {
     let node_id = network::node_id()?;
-    crate::ip_pool::IpPool::new(
+    Ok(crate::ip_pool::IpPoolDirectory::new(
         "/var/lib/barenetes/cni",
-        Ipv4Addr::new(10, 244, node_id, 2),
-        Ipv4Addr::new(10, 244, node_id, 254),
-    )
+        node_id,
+    ))
 }
 
 async fn shutdown_signal() {
