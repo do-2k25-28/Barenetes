@@ -12,3 +12,6 @@ tonic = "0.14.6"
 tonic-prost = "0.14.6"
 prost = "0.14.4"
 tokio-stream = "0.1.18"
+
+[dev-dependencies]
+tokio = { version = "1.52.3", features = ["test-util"] }
