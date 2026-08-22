@@ -2,7 +2,8 @@
 use proto::api::v1::{
     CreatePodRequest, CreatePodResponse, DeletePodRequest, DeletePodResponse, GetNodeRequest,
     GetNodeResponse, GetPodRequest, GetPodResponse, ListNodesRequest, ListNodesResponse,
-    ListPodsRequest, ListPodsResponse, WatchPodEvent,
+    ListPodsRequest, ListPodsResponse, WatchDesiredStateEvent, WatchPodEvent,
+    watch_desired_state_event,
 };
 use proto::shared::v1::{EventType, PodDetail, PodStatus};
 use tonic::{Request, Response, Status};
@@ -106,9 +107,36 @@ impl ApiService {
 
     pub async fn delete_pod_impl(
         &self,
-        _request: Request<DeletePodRequest>,
+        request: Request<DeletePodRequest>,
     ) -> Result<Response<DeletePodResponse>, Status> {
-        todo!("store.remove_pod, return NotFound if it didn't exist")
+        let req = request.into_inner();
+
+        let pod = self
+            .store
+            .remove_pod(&req.namespace, &req.name)
+            .await
+            .ok_or_else(|| {
+                Status::not_found(format!("pod {}/{} not found", req.namespace, req.name))
+            })?;
+
+        self.store.publish_pod_event(WatchPodEvent {
+            event_type: EventType::Deleted as i32,
+            pod: Some(pod.clone()),
+        });
+
+        if !pod.node_name.is_empty() {
+            self.store
+                .publish_desired_state_event(
+                    &pod.node_name,
+                    WatchDesiredStateEvent {
+                        action: watch_desired_state_event::Action::Stop as i32,
+                        pod: pod.core,
+                    },
+                )
+                .await;
+        }
+
+        Ok(Response::new(DeletePodResponse { name: req.name }))
     }
 
     pub async fn get_pod_impl(
@@ -392,5 +420,84 @@ mod tests {
             .expect_err("missing image should fail");
 
         assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    fn delete_pod_request(namespace: &str, name: &str) -> Request<DeletePodRequest> {
+        Request::new(DeletePodRequest {
+            name: name.to_string(),
+            namespace: namespace.to_string(),
+        })
+    }
+
+    #[tokio::test]
+    async fn test_delete_pod_removes_existing_pod_and_returns_name() {
+        let service = service();
+        service
+            .create_pod_impl(create_pod_request("default", "my-pod"))
+            .await
+            .expect("create_pod should succeed");
+
+        let response = service
+            .delete_pod_impl(delete_pod_request("default", "my-pod"))
+            .await
+            .expect("delete_pod should succeed")
+            .into_inner();
+
+        assert_eq!(response.name, "my-pod");
+        assert_eq!(service.store.get_pod("default", "my-pod").await, None);
+    }
+
+    #[tokio::test]
+    async fn test_delete_pod_missing_pod_returns_not_found() {
+        let service = service();
+
+        let err = service
+            .delete_pod_impl(delete_pod_request("default", "does-not-exist"))
+            .await
+            .expect_err("delete_pod should fail for an unknown pod");
+
+        assert_eq!(err.code(), Code::NotFound);
+    }
+
+    #[tokio::test]
+    async fn test_delete_pod_publishes_deleted_event() {
+        let service = service();
+        let mut events = service.store.subscribe_pod_events();
+        service
+            .create_pod_impl(create_pod_request("default", "my-pod"))
+            .await
+            .expect("create_pod should succeed");
+        events.try_recv().expect("ADDED event from create_pod"); // drain the create event
+
+        service
+            .delete_pod_impl(delete_pod_request("default", "my-pod"))
+            .await
+            .expect("delete_pod should succeed");
+
+        let event = events
+            .try_recv()
+            .expect("a DELETED event should have been published");
+        assert_eq!(event.event_type, EventType::Deleted as i32);
+    }
+
+    #[tokio::test]
+    async fn test_delete_pod_without_node_name_skips_desired_state_event() {
+        let service = service();
+        service
+            .create_pod_impl(create_pod_request("default", "my-pod"))
+            .await
+            .expect("create_pod should succeed");
+
+        let mut desired_state_events = service.store.subscribe_desired_state_events("").await;
+
+        service
+            .delete_pod_impl(delete_pod_request("default", "my-pod"))
+            .await
+            .expect("delete_pod should succeed");
+
+        assert!(
+            desired_state_events.try_recv().is_err(),
+            "a never-scheduled pod shouldn't trigger a desired-state event"
+        );
     }
 }
