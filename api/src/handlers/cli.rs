@@ -45,9 +45,15 @@ impl ApiService {
 
     pub async fn get_node_impl(
         &self,
-        _request: Request<GetNodeRequest>,
+        request: Request<GetNodeRequest>,
     ) -> Result<Response<GetNodeResponse>, Status> {
-        todo!("store.get_node, return NotFound if missing")
+        let req = request.into_inner();
+        let node = self
+            .store
+            .get_node(&req.name)
+            .await
+            .ok_or_else(|| Status::not_found(format!("nodes \"{}\" not found", req.name)))?;
+        Ok(Response::new(GetNodeResponse { node: Some(node) }))
     }
 
     pub async fn list_nodes_impl(
@@ -62,7 +68,7 @@ impl ApiService {
 mod tests {
     use std::sync::Arc;
 
-    use proto::shared::v1::{Pod, PodDetail, PodSpec, PodStatus, PodWithSpec};
+    use proto::shared::v1::{Node, NodeStatus, Pod, PodDetail, PodSpec, PodStatus, PodWithSpec};
     use tonic::Code;
 
     use crate::store::Store;
@@ -88,6 +94,7 @@ mod tests {
             message: String::new(),
             resource_usage: None,
             node_name: String::new(),
+            unschedulable_reason: None,
         }
     }
 
@@ -124,6 +131,51 @@ mod tests {
             .get_pod_impl(get_pod_request("default", "does-not-exist"))
             .await
             .expect_err("get_pod on a missing pod should return NotFound");
+
+        assert_eq!(err.code(), Code::NotFound);
+    }
+
+    fn get_node(name: &str, status: NodeStatus) -> Node {
+        Node {
+            name: name.to_string(),
+            status: status as i32,
+            capacity: None,
+            allocatable: None,
+        }
+    }
+
+    fn get_node_request(name: &str) -> Request<GetNodeRequest> {
+        Request::new(GetNodeRequest {
+            name: name.to_string(),
+        })
+    }
+
+    #[tokio::test]
+    async fn test_get_node_returns_inserted_node() {
+        let service = ApiService {
+            store: Arc::new(Store::new()),
+        };
+        let node = get_node("node-1", NodeStatus::Ready);
+        service.store.upsert_node(node.clone()).await;
+
+        let response = service
+            .get_node_impl(get_node_request("node-1"))
+            .await
+            .expect("get_node on an existing node should succeed");
+
+        assert_eq!(response.into_inner().node, Some(node));
+    }
+
+    #[tokio::test]
+    async fn test_get_node_missing_returns_not_found() {
+        let service = ApiService {
+            store: Arc::new(Store::new()),
+        };
+
+        let err = service
+            .get_node_impl(get_node_request("does-not-exist"))
+            .await
+            .expect_err("get_node on a missing node should return NotFound");
 
         assert_eq!(err.code(), Code::NotFound);
     }
