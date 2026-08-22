@@ -138,12 +138,10 @@ Distributed under the MIT License. See [`LICENSE`](LICENSE) for details.
 
 ## Star History
 
-<div align="center">
-  <a href="https://www.star-history.com/?repos=do-2k25-28%2FBarenetes&type=date&legend=bottom-right">
+<a href="https://www.star-history.com/?repos=do-2k25-28%2FBarenetes&type=date&legend=bottom-right">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=do-2k25-28/Barenetes&type=date&theme=dark&legend=bottom-right&sealed_token=hTP7TEs_FKCKENKQQXZ_2CwBMgwECqO1Xt5aJU3JWSL5tk0n80GYV-7xi_KezFhLtMMo8SN0DFaQsjIn1geR8W9IoewedkouyFan_zWgDhztiMd_wONDag" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=do-2k25-28/Barenetes&type=date&legend=bottom-right&sealed_token=hTP7TEs_FKCKENKQQXZ_2CwBMgwECqO1Xt5aJU3JWSL5tk0n80GYV-7xi_KezFhLtMMo8SN0DFaQsjIn1geR8W9IoewedkouyFan_zWgDhztiMd_wONDag" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=do-2k25-28/Barenetes&type=date&legend=bottom-right&sealed_token=hTP7TEs_FKCKENKQQXZ_2CwBMgwECqO1Xt5aJU3JWSL5tk0n80GYV-7xi_KezFhLtMMo8SN0DFaQsjIn1geR8W9IoewedkouyFan_zWgDhztiMd_wONDag" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=do-2k25-28/Barenetes&type=date&theme=dark&legend=bottom-right&sealed_token=xy3zkkEuGhtBRmDPSf48WOWyV35Mbvxa9Kc4uTwbxkXJHs5AGmQ-NcRcB9hNKCjdQJ5FhMd_QrXjB_tgvRBXg8cB0n6JPy7rtZWLyiURXpGaLBaf4yqUyg" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=do-2k25-28/Barenetes&type=date&legend=bottom-right&sealed_token=xy3zkkEuGhtBRmDPSf48WOWyV35Mbvxa9Kc4uTwbxkXJHs5AGmQ-NcRcB9hNKCjdQJ5FhMd_QrXjB_tgvRBXg8cB0n6JPy7rtZWLyiURXpGaLBaf4yqUyg" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=do-2k25-28/Barenetes&type=date&legend=bottom-right&sealed_token=xy3zkkEuGhtBRmDPSf48WOWyV35Mbvxa9Kc4uTwbxkXJHs5AGmQ-NcRcB9hNKCjdQJ5FhMd_QrXjB_tgvRBXg8cB0n6JPy7rtZWLyiURXpGaLBaf4yqUyg" />
  </picture>
 </a>
-</div>
