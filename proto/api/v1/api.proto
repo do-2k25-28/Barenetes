@@ -5,6 +5,7 @@ package api.v1;
 import "shared/v1/container.proto";
 import "shared/v1/node.proto";
 import "shared/v1/pod.proto";
+import "shared/v1/resources.proto";
 
 // ─── CLI → API ────────────────────────────────────────────
 
@@ -76,7 +77,12 @@ message AssignPodResponse {}
 // ─── agent → API ────────────────────────────────────────────
 
 message UpdatePodStatusRequest {
-  shared.v1.PodWithSpec pod = 1;
+  shared.v1.PodWithSpec pod = 1; // desired spec, unchanged by this report
+  repeated shared.v1.ContainerStatus container_statuses = 2; // observed per-container state
+  string pod_ip = 3;
+  string message = 4;
+  shared.v1.Resources resource_usage = 5;
+  // node_name is not reportable here: node assignment is the scheduler's authority (AssignPod).
 }
 message UpdatePodStatusResponse {}
 
