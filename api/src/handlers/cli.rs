@@ -90,6 +90,7 @@ impl ApiService {
             message: String::new(),
             resource_usage: None,
             node_name: String::new(),
+            unschedulable_reason: None,
         };
 
         self.store.upsert_pod(pod_detail.clone()).await;
