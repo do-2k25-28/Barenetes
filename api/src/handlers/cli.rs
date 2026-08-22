@@ -61,7 +61,8 @@ impl ApiService {
         &self,
         _request: Request<ListNodesRequest>,
     ) -> Result<Response<ListNodesResponse>, Status> {
-        todo!("store.list_nodes")
+        let nodes = self.store.list_nodes().await;
+        Ok(Response::new(ListNodesResponse { nodes }))
     }
 }
 
@@ -246,6 +247,62 @@ mod tests {
         let mut got = response.into_inner().pods;
         got.sort_by_key(pod_sort_key);
         expected.sort_by_key(pod_sort_key);
+        assert_eq!(got, expected);
+    }
+
+    #[tokio::test]
+    async fn test_list_nodes_empty_store_returns_empty_list() {
+        let service = ApiService {
+            store: Arc::new(Store::new()),
+        };
+
+        let response = service
+            .list_nodes_impl(Request::new(ListNodesRequest {}))
+            .await
+            .expect("list_nodes should always succeed");
+
+        assert!(response.into_inner().nodes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_nodes_returns_single_node() {
+        let service = ApiService {
+            store: Arc::new(Store::new()),
+        };
+        let node = get_node("node-1", NodeStatus::Ready);
+        service.store.upsert_node(node.clone()).await;
+
+        let response = service
+            .list_nodes_impl(Request::new(ListNodesRequest {}))
+            .await
+            .expect("list_nodes should always succeed");
+
+        assert_eq!(response.into_inner().nodes, vec![node]);
+    }
+
+    #[tokio::test]
+    async fn test_list_nodes_returns_all_nodes() {
+        let service = ApiService {
+            store: Arc::new(Store::new()),
+        };
+        let mut expected = vec![
+            get_node("node-a", NodeStatus::Ready),
+            get_node("node-b", NodeStatus::Cordon),
+            get_node("node-c", NodeStatus::NotReady),
+        ];
+        for node in &expected {
+            service.store.upsert_node(node.clone()).await;
+        }
+
+        let response = service
+            .list_nodes_impl(Request::new(ListNodesRequest {}))
+            .await
+            .expect("list_nodes should always succeed");
+
+        // HashMap iteration order isn't deterministic, so compare sorted by name
+        let mut got = response.into_inner().nodes;
+        got.sort_by_key(|n| n.name.clone());
+        expected.sort_by_key(|n| n.name.clone());
         assert_eq!(got, expected);
     }
 }
