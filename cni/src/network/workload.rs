@@ -1,4 +1,4 @@
-use crate::ip_pool::IpPool;
+use crate::ip_pool::IpPoolDirectory;
 use std::fs::File;
 use std::io;
 use std::os::unix::fs::MetadataExt;
@@ -15,12 +15,11 @@ use proto::cni::v1::{
 
 const IP: &str = "ip";
 const BRIDGE: &str = "bridge";
-const GATEWAY: &str = "10.244.0.1";
 const NSENTER: &str = "nsenter";
 
 pub(crate) fn add_workload_network(
     request: AddWorkloadNetworkRequest,
-    pool: &IpPool,
+    pools: &IpPoolDirectory,
     state: &StateStore,
 ) -> io::Result<WorkloadNetwork> {
     let (workload, network, pid, interface) = validate_add_request(&request)?;
@@ -51,6 +50,10 @@ pub(crate) fn add_workload_network(
         }
     }
 
+    let node = super::node_id()?;
+    let gateway = super::vlan::ensure(network.vlan_id as u8, node)?;
+    let gateway_string = gateway.to_string();
+    let pool = pools.pool(network.vlan_id)?;
     let address = pool.allocate()?;
     let host_interface = format!(
         "v{}",
@@ -103,7 +106,13 @@ pub(crate) fn add_workload_network(
         run_in_namespace(
             &netns,
             &[
-                "route", "replace", "default", "via", GATEWAY, "dev", interface,
+                "route",
+                "replace",
+                "default",
+                "via",
+                &gateway_string,
+                "dev",
+                interface,
             ],
         )?;
         run(
@@ -118,18 +127,6 @@ pub(crate) fn add_workload_network(
             ],
         )?;
         let vlan = network.vlan_id.to_string();
-        run(
-            BRIDGE,
-            &[
-                "vlan",
-                "add",
-                "dev",
-                bridge::BRIDGE_NAME,
-                "vid",
-                &vlan,
-                "self",
-            ],
-        )?;
         run(BRIDGE, &["vlan", "del", "dev", &host_interface, "vid", "1"])?;
         run(
             BRIDGE,
@@ -160,7 +157,7 @@ pub(crate) fn add_workload_network(
         host_interface,
         interface_name: interface.to_owned(),
         ip_address: address.to_string(),
-        gateway: GATEWAY.to_owned(),
+        gateway: gateway_string,
         vlan_id: network.vlan_id,
         port_mappings: request.port_mappings.clone(),
     };
@@ -201,7 +198,7 @@ pub(crate) fn get_workload_network(
 
 pub(crate) fn delete_workload_network(
     request: DeleteWorkloadNetworkRequest,
-    pool: &IpPool,
+    pools: &IpPoolDirectory,
     state: &StateStore,
 ) -> io::Result<bool> {
     let (workload, network) = validate_refs(request.workload.as_ref(), request.network.as_ref())?;
@@ -226,8 +223,13 @@ pub(crate) fn delete_workload_network(
         &workload.instance_name,
         &network.network_name,
     )?;
-    if let Err(error) = pool.release(address) {
-        eprintln!("cni: failed to release {address}: {error}");
+    match pools.pool(record.vlan_id) {
+        Ok(pool) => {
+            if let Err(error) = pool.release(address) {
+                eprintln!("cni: failed to release {address}: {error}");
+            }
+        }
+        Err(error) => eprintln!("cni: failed to release {address}: {error}"),
     }
     Ok(true)
 }
@@ -250,10 +252,10 @@ fn validate_add_request(
     ] {
         validate_name(value)?;
     }
-    if !(1..=4094).contains(&network.vlan_id) {
+    if !(1..=255).contains(&network.vlan_id) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "network vlan_id must be between 1 and 4094",
+            "network vlan_id must be between 1 and 255",
         ));
     }
     let interface = if request.interface_name.is_empty() {
