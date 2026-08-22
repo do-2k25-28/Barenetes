@@ -40,7 +40,8 @@ impl ApiService {
         &self,
         _request: Request<ListPodsRequest>,
     ) -> Result<Response<ListPodsResponse>, Status> {
-        todo!("store.list_pods")
+        let pods = self.store.list_pods().await;
+        Ok(Response::new(ListPodsResponse { pods }))
     }
 
     pub async fn get_node_impl(
@@ -178,5 +179,73 @@ mod tests {
             .expect_err("get_node on a missing node should return NotFound");
 
         assert_eq!(err.code(), Code::NotFound);
+    }
+
+    fn pod_sort_key(pod: &PodDetail) -> (String, String) {
+        let core = pod.core.as_ref();
+        (
+            core.and_then(|c| c.spec.as_ref())
+                .map(|s| s.namespace.clone())
+                .unwrap_or_default(),
+            core.and_then(|c| c.pod.as_ref())
+                .map(|p| p.name.clone())
+                .unwrap_or_default(),
+        )
+    }
+
+    #[tokio::test]
+    async fn test_list_pods_empty_store_returns_empty_list() {
+        let service = ApiService {
+            store: Arc::new(Store::new()),
+        };
+
+        let response = service
+            .list_pods_impl(Request::new(ListPodsRequest {}))
+            .await
+            .expect("list_pods should always succeed");
+
+        assert!(response.into_inner().pods.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_pods_returns_single_pod() {
+        let service = ApiService {
+            store: Arc::new(Store::new()),
+        };
+        let pod = pod_detail("default", "my-pod");
+        service.store.upsert_pod(pod.clone()).await;
+
+        let response = service
+            .list_pods_impl(Request::new(ListPodsRequest {}))
+            .await
+            .expect("list_pods should always succeed");
+
+        assert_eq!(response.into_inner().pods, vec![pod]);
+    }
+
+    #[tokio::test]
+    async fn test_list_pods_returns_all_pods() {
+        let service = ApiService {
+            store: Arc::new(Store::new()),
+        };
+        let mut expected = vec![
+            pod_detail("default", "pod-a"),
+            pod_detail("default", "pod-b"),
+            pod_detail("kube-system", "pod-c"),
+        ];
+        for pod in &expected {
+            service.store.upsert_pod(pod.clone()).await;
+        }
+
+        let response = service
+            .list_pods_impl(Request::new(ListPodsRequest {}))
+            .await
+            .expect("list_pods should always succeed");
+
+        // HashMap iteration order isn't deterministic, so compare sorted by (namespace, name)
+        let mut got = response.into_inner().pods;
+        got.sort_by_key(pod_sort_key);
+        expected.sort_by_key(pod_sort_key);
+        assert_eq!(got, expected);
     }
 }
