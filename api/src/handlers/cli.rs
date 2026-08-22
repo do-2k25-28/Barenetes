@@ -9,6 +9,30 @@ use tonic::{Request, Response, Status};
 
 use crate::service::ApiService;
 
+/// Validates a DNS-1123-label-style identifier: lowercase alphanumeric or `-`,
+/// must start and end with an alphanumeric character, max 253 characters.
+fn validate_dns1123_label(value: &str, field: &str) -> Result<(), Status> {
+    if value.is_empty() {
+        return Err(Status::invalid_argument(format!("{field} must not be empty")));
+    }
+    if value.len() > 253 {
+        return Err(Status::invalid_argument(format!(
+            "{field} must be 253 characters or fewer"
+        )));
+    }
+    let is_alnum = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit();
+    let starts_ok = value.chars().next().is_some_and(is_alnum);
+    let ends_ok = value.chars().last().is_some_and(is_alnum);
+    let chars_ok = value.chars().all(|c| is_alnum(c) || c == '-');
+    if !starts_ok || !ends_ok || !chars_ok {
+        return Err(Status::invalid_argument(format!(
+            "{field} '{value}' is invalid: must be lowercase alphanumeric characters or '-', \
+             and must start and end with an alphanumeric character"
+        )));
+    }
+    Ok(())
+}
+
 impl ApiService {
     pub async fn create_pod_impl(
         &self,
@@ -25,12 +49,28 @@ impl ApiService {
             .ok_or_else(|| Status::invalid_argument("pod.pod is required"))?
             .name
             .clone();
-        let namespace = pod_with_spec
+        let spec = pod_with_spec
             .spec
             .as_ref()
-            .ok_or_else(|| Status::invalid_argument("pod.spec is required"))?
-            .namespace
-            .clone();
+            .ok_or_else(|| Status::invalid_argument("pod.spec is required"))?;
+        let namespace = spec.namespace.clone();
+
+        validate_dns1123_label(&name, "pod name")?;
+        validate_dns1123_label(&namespace, "namespace")?;
+
+        if spec.containers.is_empty() {
+            return Err(Status::invalid_argument(
+                "pod spec must include at least one container",
+            ));
+        }
+        for container in &spec.containers {
+            if container.image.is_empty() {
+                return Err(Status::invalid_argument(format!(
+                    "container '{}' must specify an image",
+                    container.name
+                )));
+            }
+        }
 
         if self.store.get_pod(&namespace, &name).await.is_some() {
             return Err(Status::already_exists(format!(
@@ -103,7 +143,7 @@ impl ApiService {
 mod tests {
     use std::sync::Arc;
 
-    use proto::shared::v1::{Pod, PodSpec, PodWithSpec};
+    use proto::shared::v1::{Container, Pod, PodSpec, PodWithSpec};
     use tonic::Code;
 
     use super::*;
@@ -112,6 +152,15 @@ mod tests {
     fn service() -> ApiService {
         ApiService {
             store: Arc::new(Store::new()),
+        }
+    }
+
+    fn valid_container() -> Container {
+        Container {
+            name: "app".to_string(),
+            image: "busybox".to_string(),
+            ports: vec![],
+            env: vec![],
         }
     }
 
@@ -126,7 +175,7 @@ mod tests {
                 }),
                 spec: Some(PodSpec {
                     namespace: namespace.to_string(),
-                    containers: vec![],
+                    containers: vec![valid_container()],
                 }),
             }),
         })
@@ -238,6 +287,108 @@ mod tests {
             .create_pod_impl(request)
             .await
             .expect_err("missing spec should fail");
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_create_pod_empty_name_is_invalid_argument() {
+        let service = service();
+
+        let err = service
+            .create_pod_impl(create_pod_request("default", ""))
+            .await
+            .expect_err("empty name should fail");
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_create_pod_invalid_name_charset_is_invalid_argument() {
+        let service = service();
+
+        let err = service
+            .create_pod_impl(create_pod_request("default", "My_Pod"))
+            .await
+            .expect_err("invalid name charset should fail");
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_create_pod_empty_namespace_is_invalid_argument() {
+        let service = service();
+
+        let err = service
+            .create_pod_impl(create_pod_request("", "my-pod"))
+            .await
+            .expect_err("empty namespace should fail");
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_create_pod_invalid_namespace_charset_is_invalid_argument() {
+        let service = service();
+
+        let err = service
+            .create_pod_impl(create_pod_request("Default_NS", "my-pod"))
+            .await
+            .expect_err("invalid namespace charset should fail");
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_create_pod_no_containers_is_invalid_argument() {
+        let service = service();
+        let request = Request::new(CreatePodRequest {
+            pod: Some(PodWithSpec {
+                pod: Some(Pod {
+                    name: "my-pod".to_string(),
+                    status: PodStatus::Pending as i32,
+                    requests: None,
+                    limits: None,
+                }),
+                spec: Some(PodSpec {
+                    namespace: "default".to_string(),
+                    containers: vec![],
+                }),
+            }),
+        });
+
+        let err = service
+            .create_pod_impl(request)
+            .await
+            .expect_err("no containers should fail");
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_create_pod_container_missing_image_is_invalid_argument() {
+        let service = service();
+        let mut container = valid_container();
+        container.image = String::new();
+        let request = Request::new(CreatePodRequest {
+            pod: Some(PodWithSpec {
+                pod: Some(Pod {
+                    name: "my-pod".to_string(),
+                    status: PodStatus::Pending as i32,
+                    requests: None,
+                    limits: None,
+                }),
+                spec: Some(PodSpec {
+                    namespace: "default".to_string(),
+                    containers: vec![container],
+                }),
+            }),
+        });
+
+        let err = service
+            .create_pod_impl(request)
+            .await
+            .expect_err("missing image should fail");
 
         assert_eq!(err.code(), Code::InvalidArgument);
     }
