@@ -22,14 +22,18 @@ Barenetes is an open-source, reimplementation of the core Kubernetes control pla
 
 ## Table of Contents
 
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Components](#components)
-- [Getting Started](#getting-started)
-- [Building](#building)
-- [Contributing](#contributing)
-- [License](#license)
-- [Star History](#star-history)
+- [Barenetes](#barenetes)
+  - [Table of Contents](#table-of-contents)
+  - [Overview](#overview)
+  - [Architecture](#architecture)
+  - [Components](#components)
+  - [Getting Started](#getting-started)
+    - [Prerequisites](#prerequisites)
+    - [Clone](#clone)
+  - [Building](#building)
+  - [Contributing](#contributing)
+  - [License](#license)
+  - [Star History](#star-history)
 
 ---
 
@@ -134,12 +138,10 @@ Distributed under the MIT License. See [`LICENSE`](LICENSE) for details.
 
 ## Star History
 
-<div align="center">
-  <a href="https://www.star-history.com/?type=date&repos=do-2k25-28%2FBarenetes">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=do-2k25-28/Barenetes&type=date&theme=dark&legend=top-left" />
-      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=do-2k25-28/Barenetes&type=date&legend=top-left" />
-      <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=do-2k25-28/Barenetes&type=date&legend=top-left" />
-    </picture>
-  </a>
-</div>
+<a href="https://www.star-history.com/?repos=do-2k25-28%2FBarenetes&type=date&legend=bottom-right">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=do-2k25-28/Barenetes&type=date&theme=dark&legend=bottom-right&sealed_token=xy3zkkEuGhtBRmDPSf48WOWyV35Mbvxa9Kc4uTwbxkXJHs5AGmQ-NcRcB9hNKCjdQJ5FhMd_QrXjB_tgvRBXg8cB0n6JPy7rtZWLyiURXpGaLBaf4yqUyg" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=do-2k25-28/Barenetes&type=date&legend=bottom-right&sealed_token=xy3zkkEuGhtBRmDPSf48WOWyV35Mbvxa9Kc4uTwbxkXJHs5AGmQ-NcRcB9hNKCjdQJ5FhMd_QrXjB_tgvRBXg8cB0n6JPy7rtZWLyiURXpGaLBaf4yqUyg" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=do-2k25-28/Barenetes&type=date&legend=bottom-right&sealed_token=xy3zkkEuGhtBRmDPSf48WOWyV35Mbvxa9Kc4uTwbxkXJHs5AGmQ-NcRcB9hNKCjdQJ5FhMd_QrXjB_tgvRBXg8cB0n6JPy7rtZWLyiURXpGaLBaf4yqUyg" />
+ </picture>
+</a>
