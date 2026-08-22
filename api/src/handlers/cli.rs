@@ -25,29 +25,284 @@ impl ApiService {
 
     pub async fn get_pod_impl(
         &self,
-        _request: Request<GetPodRequest>,
+        request: Request<GetPodRequest>,
     ) -> Result<Response<GetPodResponse>, Status> {
-        todo!("store.get_pod, return NotFound if missing")
+        let req = request.into_inner();
+        let pod = self
+            .store
+            .get_pod(&req.namespace, &req.name)
+            .await
+            .ok_or_else(|| Status::not_found(format!("pods \"{}\" not found", req.name)))?;
+        Ok(Response::new(GetPodResponse { pod: Some(pod) }))
     }
 
     pub async fn list_pods_impl(
         &self,
         _request: Request<ListPodsRequest>,
     ) -> Result<Response<ListPodsResponse>, Status> {
-        todo!("store.list_pods")
+        let pods = self.store.list_pods().await;
+        Ok(Response::new(ListPodsResponse { pods }))
     }
 
     pub async fn get_node_impl(
         &self,
-        _request: Request<GetNodeRequest>,
+        request: Request<GetNodeRequest>,
     ) -> Result<Response<GetNodeResponse>, Status> {
-        todo!("store.get_node, return NotFound if missing")
+        let req = request.into_inner();
+        let node = self
+            .store
+            .get_node(&req.name)
+            .await
+            .ok_or_else(|| Status::not_found(format!("nodes \"{}\" not found", req.name)))?;
+        Ok(Response::new(GetNodeResponse { node: Some(node) }))
     }
 
     pub async fn list_nodes_impl(
         &self,
         _request: Request<ListNodesRequest>,
     ) -> Result<Response<ListNodesResponse>, Status> {
-        todo!("store.list_nodes")
+        let nodes = self.store.list_nodes().await;
+        Ok(Response::new(ListNodesResponse { nodes }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use proto::shared::v1::{Node, NodeStatus, Pod, PodDetail, PodSpec, PodStatus, PodWithSpec};
+    use tonic::Code;
+
+    use crate::store::Store;
+
+    use super::*;
+
+    fn pod_detail(namespace: &str, name: &str) -> PodDetail {
+        PodDetail {
+            core: Some(PodWithSpec {
+                pod: Some(Pod {
+                    name: name.to_string(),
+                    status: PodStatus::Pending as i32,
+                    requests: None,
+                    limits: None,
+                }),
+                spec: Some(PodSpec {
+                    namespace: namespace.to_string(),
+                    containers: vec![],
+                }),
+            }),
+            container_statuses: vec![],
+            pod_ip: String::new(),
+            message: String::new(),
+            resource_usage: None,
+            node_name: String::new(),
+            unschedulable_reason: None,
+        }
+    }
+
+    fn get_pod_request(namespace: &str, name: &str) -> Request<GetPodRequest> {
+        Request::new(GetPodRequest {
+            name: name.to_string(),
+            namespace: namespace.to_string(),
+        })
+    }
+
+    #[tokio::test]
+    async fn test_get_pod_returns_inserted_pod() {
+        let service = ApiService {
+            store: Arc::new(Store::new()),
+        };
+        let pod = pod_detail("default", "my-pod");
+        service.store.upsert_pod(pod.clone()).await;
+
+        let response = service
+            .get_pod_impl(get_pod_request("default", "my-pod"))
+            .await
+            .expect("get_pod on an existing pod should succeed");
+
+        assert_eq!(response.into_inner().pod, Some(pod));
+    }
+
+    #[tokio::test]
+    async fn test_get_pod_missing_returns_not_found() {
+        let service = ApiService {
+            store: Arc::new(Store::new()),
+        };
+
+        let err = service
+            .get_pod_impl(get_pod_request("default", "does-not-exist"))
+            .await
+            .expect_err("get_pod on a missing pod should return NotFound");
+
+        assert_eq!(err.code(), Code::NotFound);
+    }
+
+    fn get_node(name: &str, status: NodeStatus) -> Node {
+        Node {
+            name: name.to_string(),
+            status: status as i32,
+            capacity: None,
+            allocatable: None,
+        }
+    }
+
+    fn get_node_request(name: &str) -> Request<GetNodeRequest> {
+        Request::new(GetNodeRequest {
+            name: name.to_string(),
+        })
+    }
+
+    #[tokio::test]
+    async fn test_get_node_returns_inserted_node() {
+        let service = ApiService {
+            store: Arc::new(Store::new()),
+        };
+        let node = get_node("node-1", NodeStatus::Ready);
+        service.store.upsert_node(node.clone()).await;
+
+        let response = service
+            .get_node_impl(get_node_request("node-1"))
+            .await
+            .expect("get_node on an existing node should succeed");
+
+        assert_eq!(response.into_inner().node, Some(node));
+    }
+
+    #[tokio::test]
+    async fn test_get_node_missing_returns_not_found() {
+        let service = ApiService {
+            store: Arc::new(Store::new()),
+        };
+
+        let err = service
+            .get_node_impl(get_node_request("does-not-exist"))
+            .await
+            .expect_err("get_node on a missing node should return NotFound");
+
+        assert_eq!(err.code(), Code::NotFound);
+    }
+
+    fn pod_sort_key(pod: &PodDetail) -> (String, String) {
+        let core = pod.core.as_ref();
+        (
+            core.and_then(|c| c.spec.as_ref())
+                .map(|s| s.namespace.clone())
+                .unwrap_or_default(),
+            core.and_then(|c| c.pod.as_ref())
+                .map(|p| p.name.clone())
+                .unwrap_or_default(),
+        )
+    }
+
+    #[tokio::test]
+    async fn test_list_pods_empty_store_returns_empty_list() {
+        let service = ApiService {
+            store: Arc::new(Store::new()),
+        };
+
+        let response = service
+            .list_pods_impl(Request::new(ListPodsRequest {}))
+            .await
+            .expect("list_pods should always succeed");
+
+        assert!(response.into_inner().pods.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_pods_returns_single_pod() {
+        let service = ApiService {
+            store: Arc::new(Store::new()),
+        };
+        let pod = pod_detail("default", "my-pod");
+        service.store.upsert_pod(pod.clone()).await;
+
+        let response = service
+            .list_pods_impl(Request::new(ListPodsRequest {}))
+            .await
+            .expect("list_pods should always succeed");
+
+        assert_eq!(response.into_inner().pods, vec![pod]);
+    }
+
+    #[tokio::test]
+    async fn test_list_pods_returns_all_pods() {
+        let service = ApiService {
+            store: Arc::new(Store::new()),
+        };
+        let mut expected = vec![
+            pod_detail("default", "pod-a"),
+            pod_detail("default", "pod-b"),
+            pod_detail("kube-system", "pod-c"),
+        ];
+        for pod in &expected {
+            service.store.upsert_pod(pod.clone()).await;
+        }
+
+        let response = service
+            .list_pods_impl(Request::new(ListPodsRequest {}))
+            .await
+            .expect("list_pods should always succeed");
+
+        // HashMap iteration order isn't deterministic, so compare sorted by (namespace, name)
+        let mut got = response.into_inner().pods;
+        got.sort_by_key(pod_sort_key);
+        expected.sort_by_key(pod_sort_key);
+        assert_eq!(got, expected);
+    }
+
+    #[tokio::test]
+    async fn test_list_nodes_empty_store_returns_empty_list() {
+        let service = ApiService {
+            store: Arc::new(Store::new()),
+        };
+
+        let response = service
+            .list_nodes_impl(Request::new(ListNodesRequest {}))
+            .await
+            .expect("list_nodes should always succeed");
+
+        assert!(response.into_inner().nodes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_nodes_returns_single_node() {
+        let service = ApiService {
+            store: Arc::new(Store::new()),
+        };
+        let node = get_node("node-1", NodeStatus::Ready);
+        service.store.upsert_node(node.clone()).await;
+
+        let response = service
+            .list_nodes_impl(Request::new(ListNodesRequest {}))
+            .await
+            .expect("list_nodes should always succeed");
+
+        assert_eq!(response.into_inner().nodes, vec![node]);
+    }
+
+    #[tokio::test]
+    async fn test_list_nodes_returns_all_nodes() {
+        let service = ApiService {
+            store: Arc::new(Store::new()),
+        };
+        let mut expected = vec![
+            get_node("node-a", NodeStatus::Ready),
+            get_node("node-b", NodeStatus::Cordon),
+            get_node("node-c", NodeStatus::NotReady),
+        ];
+        for node in &expected {
+            service.store.upsert_node(node.clone()).await;
+        }
+
+        let response = service
+            .list_nodes_impl(Request::new(ListNodesRequest {}))
+            .await
+            .expect("list_nodes should always succeed");
+
+        // HashMap iteration order isn't deterministic, so compare sorted by name
+        let mut got = response.into_inner().nodes;
+        got.sort_by_key(|n| n.name.clone());
+        expected.sort_by_key(|n| n.name.clone());
+        assert_eq!(got, expected);
     }
 }
