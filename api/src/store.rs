@@ -219,6 +219,7 @@ mod tests {
             message: String::new(),
             resource_usage: None,
             node_name: String::new(),
+            unschedulable_reason: None,
         }
     }
 
