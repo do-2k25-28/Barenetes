@@ -74,10 +74,6 @@ impl ApiService {
             }
         }
 
-        if self.store.get_pod(&namespace, &name).await.is_some() {
-            return Err(crate::errors::pod_already_exists(&namespace, &name));
-        }
-
         let mut pod_with_spec = pod_with_spec;
         if let Some(pod) = pod_with_spec.pod.as_mut() {
             pod.status = PodStatus::Pending as i32;
@@ -93,7 +89,9 @@ impl ApiService {
             unschedulable_reason: None,
         };
 
-        self.store.upsert_pod(pod_detail.clone()).await;
+        if !self.store.create_pod(pod_detail.clone()).await {
+            return Err(crate::errors::pod_already_exists(&namespace, &name));
+        }
         self.store.publish_pod_event(WatchPodEvent {
             event_type: EventType::Added as i32,
             pod: Some(pod_detail.clone()),

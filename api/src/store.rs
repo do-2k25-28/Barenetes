@@ -53,6 +53,20 @@ impl Store {
         self.pods.write().await.insert(key, pod);
     }
 
+    /// Inserts a pod only if no existing pod shares its (namespace, name), atomically under
+    /// a single lock acquisition. Returns `false` (leaving the existing pod untouched) if one
+    /// already exists, so callers can implement create-once semantics without a separate
+    /// check-then-act race between `get_pod` and `upsert_pod`.
+    pub async fn create_pod(&self, pod: PodDetail) -> bool {
+        let key = pod_key(&pod);
+        let mut pods = self.pods.write().await;
+        if pods.contains_key(&key) {
+            return false;
+        }
+        pods.insert(key, pod);
+        true
+    }
+
     pub async fn get_pod(&self, namespace: &str, name: &str) -> Option<PodDetail> {
         self.pods
             .read()
@@ -246,6 +260,19 @@ mod tests {
         let store = Store::new();
 
         assert_eq!(store.get_pod("default", "does-not-exist").await, None);
+    }
+
+    #[tokio::test]
+    async fn test_create_pod_rejects_duplicate_and_leaves_existing_untouched() {
+        let store = Store::new();
+        let original = test_support::pod_detail("default", "my-pod");
+        assert!(store.create_pod(original.clone()).await);
+
+        let mut duplicate = test_support::pod_detail("default", "my-pod");
+        duplicate.message = Some("different".to_string());
+        assert!(!store.create_pod(duplicate).await);
+
+        assert_eq!(store.get_pod("default", "my-pod").await, Some(original));
     }
 
     #[tokio::test]
