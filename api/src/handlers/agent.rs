@@ -1,9 +1,8 @@
 /// Agent-facing status reports and desired-state watch.
 use proto::api::v1::{
     UpdateNodeStatusRequest, UpdateNodeStatusResponse, UpdatePodStatusRequest,
-    UpdatePodStatusResponse, WatchDesiredStateRequest, WatchNodeEvent,
+    UpdatePodStatusResponse, WatchDesiredStateRequest,
 };
-use proto::shared::v1::EventType;
 use tonic::{Request, Response, Status};
 
 use crate::service::{ApiService, DesiredStateEventStream};
@@ -24,16 +23,11 @@ impl ApiService {
         let node = req
             .node
             .ok_or_else(|| crate::errors::missing_node("<unknown>"))?;
+        if node.name.is_empty() {
+            return Err(Status::invalid_argument("missing node name"));
+        }
 
-        let newly_registered = self.store.upsert_node(node.clone()).await;
-        self.store.publish_node_event(WatchNodeEvent {
-            event_type: if newly_registered {
-                EventType::Added
-            } else {
-                EventType::Modified
-            } as i32,
-            node: Some(node),
-        });
+        self.store.upsert_and_publish_node(node).await;
 
         Ok(Response::new(UpdateNodeStatusResponse {}))
     }
@@ -51,7 +45,8 @@ impl ApiService {
 
 #[cfg(test)]
 mod tests {
-    use proto::shared::v1::NodeStatus;
+    use proto::api::v1::UpdateNodeStatusRequest;
+    use proto::shared::v1::{EventType, NodeStatus};
     use tonic::Code;
 
     use crate::test_support::{self, node};
@@ -121,5 +116,18 @@ mod tests {
             .expect_err("a request without a node should be rejected");
 
         assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_update_node_status_blank_name_rejected() {
+        let service = test_support::service();
+
+        let err = service
+            .update_node_status_impl(update_node_status_request("", NodeStatus::Ready))
+            .await
+            .expect_err("a blank node name should be rejected");
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert_eq!(err.message(), "missing node name");
     }
 }
