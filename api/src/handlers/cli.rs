@@ -32,7 +32,7 @@ impl ApiService {
             .store
             .get_pod(&req.namespace, &req.name)
             .await
-            .ok_or_else(|| Status::not_found(format!("pods \"{}\" not found", req.name)))?;
+            .ok_or_else(|| crate::errors::pod_not_found(&req.namespace, &req.name))?;
         Ok(Response::new(GetPodResponse { pod: Some(pod) }))
     }
 
@@ -53,7 +53,7 @@ impl ApiService {
             .store
             .get_node(&req.name)
             .await
-            .ok_or_else(|| Status::not_found(format!("nodes \"{}\" not found", req.name)))?;
+            .ok_or_else(|| crate::errors::node_not_found(&req.name))?;
         Ok(Response::new(GetNodeResponse { node: Some(node) }))
     }
 
@@ -68,37 +68,13 @@ impl ApiService {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use proto::shared::v1::{Node, NodeStatus, Pod, PodDetail, PodSpec, PodStatus, PodWithSpec};
+    use proto::shared::v1::{NodeStatus, PodDetail};
     use tonic::Code;
 
-    use crate::store::Store;
+    use crate::test_support;
+    use crate::test_support::service;
 
     use super::*;
-
-    fn pod_detail(namespace: &str, name: &str) -> PodDetail {
-        PodDetail {
-            core: Some(PodWithSpec {
-                pod: Some(Pod {
-                    name: name.to_string(),
-                    status: PodStatus::Pending as i32,
-                    requests: None,
-                    limits: None,
-                }),
-                spec: Some(PodSpec {
-                    namespace: namespace.to_string(),
-                    containers: vec![],
-                }),
-            }),
-            container_statuses: vec![],
-            pod_ip: String::new(),
-            message: String::new(),
-            resource_usage: None,
-            node_name: String::new(),
-            unschedulable_reason: None,
-        }
-    }
 
     fn get_pod_request(namespace: &str, name: &str) -> Request<GetPodRequest> {
         Request::new(GetPodRequest {
@@ -109,10 +85,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_pod_returns_inserted_pod() {
-        let service = ApiService {
-            store: Arc::new(Store::new()),
-        };
-        let pod = pod_detail("default", "my-pod");
+        let service = service();
+        let pod = test_support::pod_detail("default", "my-pod");
         service.store.upsert_pod(pod.clone()).await;
 
         let response = service
@@ -125,9 +99,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_pod_missing_returns_not_found() {
-        let service = ApiService {
-            store: Arc::new(Store::new()),
-        };
+        let service = service();
 
         let err = service
             .get_pod_impl(get_pod_request("default", "does-not-exist"))
@@ -135,15 +107,6 @@ mod tests {
             .expect_err("get_pod on a missing pod should return NotFound");
 
         assert_eq!(err.code(), Code::NotFound);
-    }
-
-    fn get_node(name: &str, status: NodeStatus) -> Node {
-        Node {
-            name: name.to_string(),
-            status: status as i32,
-            capacity: None,
-            allocatable: None,
-        }
     }
 
     fn get_node_request(name: &str) -> Request<GetNodeRequest> {
@@ -154,10 +117,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_node_returns_inserted_node() {
-        let service = ApiService {
-            store: Arc::new(Store::new()),
-        };
-        let node = get_node("node-1", NodeStatus::Ready);
+        let service = service();
+        let node = test_support::node("node-1", NodeStatus::Ready);
         service.store.upsert_node(node.clone()).await;
 
         let response = service
@@ -170,9 +131,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_node_missing_returns_not_found() {
-        let service = ApiService {
-            store: Arc::new(Store::new()),
-        };
+        let service = service();
 
         let err = service
             .get_node_impl(get_node_request("does-not-exist"))
@@ -196,9 +155,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_pods_empty_store_returns_empty_list() {
-        let service = ApiService {
-            store: Arc::new(Store::new()),
-        };
+        let service = service();
 
         let response = service
             .list_pods_impl(Request::new(ListPodsRequest {}))
@@ -210,10 +167,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_pods_returns_single_pod() {
-        let service = ApiService {
-            store: Arc::new(Store::new()),
-        };
-        let pod = pod_detail("default", "my-pod");
+        let service = service();
+        let pod = test_support::pod_detail("default", "my-pod");
         service.store.upsert_pod(pod.clone()).await;
 
         let response = service
@@ -226,13 +181,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_pods_returns_all_pods() {
-        let service = ApiService {
-            store: Arc::new(Store::new()),
-        };
+        let service = service();
         let mut expected = vec![
-            pod_detail("default", "pod-a"),
-            pod_detail("default", "pod-b"),
-            pod_detail("kube-system", "pod-c"),
+            test_support::pod_detail("default", "pod-a"),
+            test_support::pod_detail("default", "pod-b"),
+            test_support::pod_detail("kube-system", "pod-c"),
         ];
         for pod in &expected {
             service.store.upsert_pod(pod.clone()).await;
@@ -252,9 +205,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_nodes_empty_store_returns_empty_list() {
-        let service = ApiService {
-            store: Arc::new(Store::new()),
-        };
+        let service = service();
 
         let response = service
             .list_nodes_impl(Request::new(ListNodesRequest {}))
@@ -266,10 +217,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_nodes_returns_single_node() {
-        let service = ApiService {
-            store: Arc::new(Store::new()),
-        };
-        let node = get_node("node-1", NodeStatus::Ready);
+        let service = service();
+        let node = test_support::node("node-1", NodeStatus::Ready);
         service.store.upsert_node(node.clone()).await;
 
         let response = service
@@ -282,13 +231,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_nodes_returns_all_nodes() {
-        let service = ApiService {
-            store: Arc::new(Store::new()),
-        };
+        let service = service();
         let mut expected = vec![
-            get_node("node-a", NodeStatus::Ready),
-            get_node("node-b", NodeStatus::Cordon),
-            get_node("node-c", NodeStatus::NotReady),
+            test_support::node("node-a", NodeStatus::Ready),
+            test_support::node("node-b", NodeStatus::Cordon),
+            test_support::node("node-c", NodeStatus::NotReady),
         ];
         for node in &expected {
             service.store.upsert_node(node.clone()).await;
