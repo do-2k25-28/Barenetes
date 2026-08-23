@@ -89,6 +89,14 @@ impl Store {
             event_type: event_type as i32,
             node: Some(node),
         });
+
+    /// Inserts or replaces a node, and records this call as a liveness heartbeat.
+    pub async fn upsert_node(&self, node: Node) {
+        self.node_last_seen
+            .write()
+            .await
+            .insert(node.name.clone(), Instant::now());
+        self.nodes.write().await.insert(node.name.clone(), node);
     }
 
     pub async fn get_node(&self, name: &str) -> Option<Node> {
@@ -229,7 +237,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_upsert_and_publish_node_publishes_added_then_modified() {
+    async fn test_update_pod_status_applies_mutation_and_publishes_modified() {
+        let store = Store::new();
+        store
+            .upsert_pod(test_support::pod_detail("default", "web"))
+            .await;
+        let mut events = store.subscribe_pod_events();
+
+        let updated = store
+            .update_pod_status("default", "web", |pod| {
+                pod.pod_ip = "10.0.0.5".to_string();
+            })
+            .await
+            .expect("an existing pod should be updated");
+
+        assert_eq!(updated.pod_ip, "10.0.0.5");
+        assert_eq!(
+            store.get_pod("default", "web").await.unwrap().pod_ip,
+            "10.0.0.5"
+        );
+
+        let event = events
+            .try_recv()
+            .expect("a pod update should publish a MODIFIED event");
+        assert_eq!(event.event_type, EventType::Modified as i32);
+        assert_eq!(event.pod.unwrap().pod_ip, "10.0.0.5");
+
+        assert!(
+            store
+                .update_pod_status("default", "ghost", |_| {})
+                .await
+                .is_none(),
+            "updating a missing pod should return None"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_upsert_node_replaces_existing() {
         let store = Store::new();
         let mut events = store.subscribe_node_events();
 

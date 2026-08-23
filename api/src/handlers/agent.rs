@@ -1,9 +1,8 @@
 /// Agent-facing status reports and desired-state watch.
 use proto::api::v1::{
     UpdateNodeStatusRequest, UpdateNodeStatusResponse, UpdatePodStatusRequest,
-    UpdatePodStatusResponse, WatchDesiredStateRequest, WatchPodEvent,
+    UpdatePodStatusResponse, WatchDesiredStateRequest,
 };
-use proto::shared::v1::EventType;
 use tonic::{Request, Response, Status};
 
 use crate::service::{ApiService, DesiredStateEventStream};
@@ -13,14 +12,18 @@ impl ApiService {
         &self,
         request: Request<UpdatePodStatusRequest>,
     ) -> Result<Response<UpdatePodStatusResponse>, Status> {
-        let req = request.into_inner();
+        let UpdatePodStatusRequest {
+            pod,
+            container_statuses,
+            pod_ip,
+            message,
+            resource_usage,
+        } = request.into_inner();
         // No namespace/name exist yet when the pod field itself is absent, so the
         // not-found message carries "<unknown>" placeholders instead.
-        let reported = req
-            .pod
-            .ok_or_else(|| crate::errors::pod_not_found("<unknown>", "<unknown>"))?;
+        let reported = pod.ok_or_else(|| crate::errors::pod_not_found("<unknown>", "<unknown>"))?;
         let spec = reported.spec.unwrap_or_default();
-        let pod = reported
+        let reported_pod = reported
             .pod
             .filter(|pod| !pod.name.is_empty())
             .ok_or_else(|| Status::invalid_argument("missing pod name"))?;
@@ -28,27 +31,20 @@ impl ApiService {
             return Err(Status::invalid_argument("missing pod namespace"));
         }
 
-        let mut detail = self
-            .store
-            .get_pod(&spec.namespace, &pod.name)
+        self.store
+            .update_pod_status(&spec.namespace, &reported_pod.name, |detail| {
+                // The agent owns the observed lifecycle status; the desired spec stays as
+                // stored, and node placement remains the scheduler's authority (AssignPod).
+                if let Some(core_pod) = detail.core.as_mut().and_then(|core| core.pod.as_mut()) {
+                    core_pod.status = reported_pod.status;
+                }
+                detail.container_statuses = container_statuses;
+                detail.pod_ip = pod_ip;
+                detail.message = message;
+                detail.resource_usage = resource_usage;
+            })
             .await
-            .ok_or_else(|| crate::errors::pod_not_found(&spec.namespace, &pod.name))?;
-
-        // The agent owns the observed lifecycle status; the desired spec stays as
-        // stored, and node placement remains the scheduler's authority (AssignPod).
-        if let Some(core_pod) = detail.core.as_mut().and_then(|core| core.pod.as_mut()) {
-            core_pod.status = pod.status;
-        }
-        detail.container_statuses = req.container_statuses;
-        detail.pod_ip = req.pod_ip;
-        detail.message = req.message;
-        detail.resource_usage = req.resource_usage;
-
-        self.store.upsert_pod(detail.clone()).await;
-        self.store.publish_pod_event(WatchPodEvent {
-            event_type: EventType::Modified as i32,
-            pod: Some(detail),
-        });
+            .ok_or_else(|| crate::errors::pod_not_found(&spec.namespace, &reported_pod.name))?;
 
         Ok(Response::new(UpdatePodStatusResponse {}))
     }
