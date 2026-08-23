@@ -196,46 +196,15 @@ fn pod_key(pod: &PodDetail) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use proto::api::v1::watch_desired_state_event;
-    use proto::shared::v1::{NodeStatus, Pod, PodSpec, PodStatus, PodWithSpec};
+    use proto::shared::v1::NodeStatus;
 
     use super::*;
-
-    fn get_pod_detail(namespace: &str, name: &str) -> PodDetail {
-        PodDetail {
-            core: Some(PodWithSpec {
-                pod: Some(Pod {
-                    name: name.to_string(),
-                    status: PodStatus::Pending as i32,
-                    requests: None,
-                    limits: None,
-                }),
-                spec: Some(PodSpec {
-                    namespace: namespace.to_string(),
-                    containers: vec![],
-                }),
-            }),
-            container_statuses: vec![],
-            pod_ip: String::new(),
-            message: String::new(),
-            resource_usage: None,
-            node_name: String::new(),
-            unschedulable_reason: None,
-        }
-    }
-
-    fn get_node(name: &str, status: NodeStatus) -> Node {
-        Node {
-            name: name.to_string(),
-            status: status as i32,
-            capacity: None,
-            allocatable: None,
-        }
-    }
+    use crate::test_support;
 
     #[tokio::test]
     async fn test_upsert_and_get_pod() {
         let store = Store::new();
-        let pod = get_pod_detail("default", "my-pod");
+        let pod = test_support::pod_detail("default", "my-pod");
 
         store.upsert_pod(pod.clone()).await;
 
@@ -253,11 +222,11 @@ mod tests {
     async fn test_upsert_node_replaces_existing() {
         let store = Store::new();
         store
-            .upsert_node(get_node("node-1", NodeStatus::Ready))
+            .upsert_node(test_support::node("node-1", NodeStatus::Ready))
             .await;
 
         store
-            .upsert_node(get_node("node-1", NodeStatus::NotReady))
+            .upsert_node(test_support::node("node-1", NodeStatus::NotReady))
             .await;
 
         let nodes = store.list_nodes().await;
@@ -302,7 +271,7 @@ mod tests {
     async fn test_sweep_stale_nodes_marks_unresponsive_node_not_ready() {
         let store = Store::new();
         store
-            .upsert_node(get_node("node-1", NodeStatus::Ready))
+            .upsert_node(test_support::node("node-1", NodeStatus::Ready))
             .await;
         let mut events = store.subscribe_node_events();
 
@@ -322,7 +291,7 @@ mod tests {
     async fn test_sweep_stale_nodes_leaves_fresh_node_untouched() {
         let store = Store::new();
         store
-            .upsert_node(get_node("node-1", NodeStatus::Ready))
+            .upsert_node(test_support::node("node-1", NodeStatus::Ready))
             .await;
 
         tokio::time::advance(Duration::from_secs(1)).await;
@@ -337,12 +306,12 @@ mod tests {
     async fn test_upsert_node_refreshes_liveness() {
         let store = Store::new();
         store
-            .upsert_node(get_node("node-1", NodeStatus::Ready))
+            .upsert_node(test_support::node("node-1", NodeStatus::Ready))
             .await;
 
         tokio::time::advance(NODE_STALE_TIMEOUT - Duration::from_secs(1)).await;
         store
-            .upsert_node(get_node("node-1", NodeStatus::Ready))
+            .upsert_node(test_support::node("node-1", NodeStatus::Ready))
             .await; // heartbeat
 
         tokio::time::advance(NODE_STALE_TIMEOUT - Duration::from_secs(1)).await;
@@ -355,7 +324,7 @@ mod tests {
     async fn test_sweep_stale_nodes_does_not_report_already_not_ready_node() {
         let store = Store::new();
         store
-            .upsert_node(get_node("node-1", NodeStatus::NotReady))
+            .upsert_node(test_support::node("node-1", NodeStatus::NotReady))
             .await;
 
         tokio::time::advance(NODE_STALE_TIMEOUT + Duration::from_secs(1)).await;
