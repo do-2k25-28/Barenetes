@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use proto::shared::v1::{Node, NodeStatus, Pod, PodDetail, PodSpec, PodStatus, PodWithSpec};
+use proto::shared::v1::{
+    Container, Node, NodeStatus, Pod, PodDetail, PodSpec, PodStatus, PodWithSpec,
+};
 
 use crate::service::ApiService;
 use crate::store::Store;
@@ -42,5 +44,14 @@ pub(crate) fn node(name: &str, status: NodeStatus) -> Node {
         status: status as i32,
         capacity: None,
         allocatable: None,
+    }
+}
+
+pub(crate) fn container(name: &str, image: &str) -> Container {
+    Container {
+        name: name.to_string(),
+        image: image.to_string(),
+        ports: vec![],
+        env: vec![],
     }
 }

@@ -75,9 +75,7 @@ impl ApiService {
         }
 
         if self.store.get_pod(&namespace, &name).await.is_some() {
-            return Err(Status::already_exists(format!(
-                "pod {namespace}/{name} already exists"
-            )));
+            return Err(crate::errors::pod_already_exists(&namespace, &name));
         }
 
         let mut pod_with_spec = pod_with_spec;
@@ -88,8 +86,8 @@ impl ApiService {
         let pod_detail = PodDetail {
             core: Some(pod_with_spec),
             container_statuses: vec![],
-            pod_ip: String::new(),
-            message: String::new(),
+            pod_ip: None,
+            message: None,
             resource_usage: None,
             node_name: String::new(),
             unschedulable_reason: None,
@@ -158,7 +156,7 @@ impl ApiService {
 
 #[cfg(test)]
 mod tests {
-    use proto::shared::v1::{NodeStatus, PodDetail};
+    use proto::shared::v1::{NodeStatus, Pod, PodDetail, PodSpec, PodWithSpec};
     use tonic::Code;
 
     use crate::test_support;
@@ -342,32 +340,6 @@ mod tests {
         expected.sort_by_key(|n| n.name.clone());
         assert_eq!(got, expected);
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use proto::shared::v1::{Container, Pod, PodSpec, PodWithSpec};
-    use tonic::Code;
-
-    use super::*;
-    use crate::store::Store;
-
-    fn service() -> ApiService {
-        ApiService {
-            store: Arc::new(Store::new()),
-        }
-    }
-
-    fn valid_container() -> Container {
-        Container {
-            name: "app".to_string(),
-            image: "busybox".to_string(),
-            ports: vec![],
-            env: vec![],
-        }
-    }
 
     fn create_pod_request(namespace: &str, name: &str) -> Request<CreatePodRequest> {
         Request::new(CreatePodRequest {
@@ -380,7 +352,7 @@ mod tests {
                 }),
                 spec: Some(PodSpec {
                     namespace: namespace.to_string(),
-                    containers: vec![valid_container()],
+                    containers: vec![test_support::container("app", "busybox")],
                 }),
             }),
         })
@@ -573,7 +545,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_pod_container_missing_image_is_invalid_argument() {
         let service = service();
-        let mut container = valid_container();
+        let mut container = test_support::container("app", "busybox");
         container.image = String::new();
         let request = Request::new(CreatePodRequest {
             pod: Some(PodWithSpec {
