@@ -2,6 +2,8 @@ mod errors;
 mod handlers;
 mod service;
 mod store;
+#[cfg(test)]
+mod test_support;
 
 use std::sync::Arc;
 
