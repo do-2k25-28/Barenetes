@@ -6,3 +6,4 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+clap = { version = "4.6.6", features = ["derive"] }

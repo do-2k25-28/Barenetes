@@ -1,3 +1,9 @@
+use clap::{Parser};
+
+#[derive(Parser)]
+#[command(version)]
+struct Args;
+
 fn main() {
-    println!("Hello, world!");
+    Args::parse();
 }
