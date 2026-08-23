@@ -32,7 +32,7 @@ impl ApiService {
             .store
             .get_pod(&req.namespace, &req.name)
             .await
-            .ok_or_else(|| Status::not_found(format!("pods \"{}\" not found", req.name)))?;
+            .ok_or_else(|| crate::errors::pod_not_found(&req.namespace, &req.name))?;
         Ok(Response::new(GetPodResponse { pod: Some(pod) }))
     }
 
@@ -53,7 +53,7 @@ impl ApiService {
             .store
             .get_node(&req.name)
             .await
-            .ok_or_else(|| Status::not_found(format!("nodes \"{}\" not found", req.name)))?;
+            .ok_or_else(|| crate::errors::node_not_found(&req.name))?;
         Ok(Response::new(GetNodeResponse { node: Some(node) }))
     }
 

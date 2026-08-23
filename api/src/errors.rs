@@ -2,12 +2,10 @@
 // exists" the same way instead of hand-building a message per call site.
 use tonic::Status;
 
-#[allow(dead_code)]
 pub(crate) fn pod_not_found(namespace: &str, name: &str) -> Status {
     Status::not_found(format!("pod {namespace}/{name} not found"))
 }
 
-#[allow(dead_code)]
 pub(crate) fn node_not_found(name: &str) -> Status {
     Status::not_found(format!("node {name} not found"))
 }
