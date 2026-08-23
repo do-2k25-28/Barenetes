@@ -73,12 +73,17 @@ impl Store {
     }
 
     /// Inserts or replaces a node, and records this call as a liveness heartbeat.
-    pub async fn upsert_node(&self, node: Node) {
+    /// Returns true when the node didn't exist yet.
+    pub async fn upsert_node(&self, node: Node) -> bool {
         self.node_last_seen
             .write()
             .await
             .insert(node.name.clone(), Instant::now());
-        self.nodes.write().await.insert(node.name.clone(), node);
+        self.nodes
+            .write()
+            .await
+            .insert(node.name.clone(), node)
+            .is_none()
     }
 
     pub async fn get_node(&self, name: &str) -> Option<Node> {

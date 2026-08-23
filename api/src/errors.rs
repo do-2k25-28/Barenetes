@@ -10,6 +10,10 @@ pub(crate) fn node_not_found(name: &str) -> Status {
     Status::not_found(format!("node {name} not found"))
 }
 
+pub(crate) fn missing_node(name: &str) -> Status {
+    Status::invalid_argument(format!("missing node {name}"))
+}
+
 #[allow(dead_code)]
 pub(crate) fn pod_already_exists(namespace: &str, name: &str) -> Status {
     Status::already_exists(format!("pod {namespace}/{name} already exists"))
@@ -40,5 +44,12 @@ mod tests {
         let status = pod_already_exists("default", "my-pod");
         assert_eq!(status.code(), Code::AlreadyExists);
         assert_eq!(status.message(), "pod default/my-pod already exists");
+    }
+
+    #[test]
+    fn test_missing_node() {
+        let status = missing_node("node-1");
+        assert_eq!(status.code(), Code::InvalidArgument);
+        assert_eq!(status.message(), "missing node node-1");
     }
 }
