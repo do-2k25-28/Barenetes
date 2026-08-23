@@ -2,6 +2,7 @@ mod errors;
 mod handlers;
 mod service;
 mod store;
+mod telemetry;
 #[cfg(test)]
 mod test_support;
 
@@ -32,7 +33,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let api_service = ApiService { store };
 
-    println!("API server starting on {addr}");
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
+    tracing::info!(%addr, "API server starting");
 
     Server::builder()
         .add_service(ApiServerServer::new(api_service))
