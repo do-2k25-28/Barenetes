@@ -53,12 +53,13 @@ impl Containerd {
         Ok(Self { channel })
     }
 
-    /// Pull `container.image` and start it as `<pod>-<container.name>`.
+    /// Pull `container.image` and start it as `<pod>-<container.name>`,
+    /// returning the pid of the container process.
     pub async fn run_container(
         &self,
         pod: &str,
         container: &proto::shared::v1::Container,
-    ) -> Result<(), Status> {
+    ) -> Result<u32, Status> {
         let id = container_id(pod, &container.name);
 
         self.pull_image(&container.image).await?;
@@ -115,7 +116,7 @@ impl Containerd {
 
         let mut tasks = TasksClient::new(self.channel());
         // Empty stdio paths tell the shim to discard the container output.
-        tasks
+        let pid = tasks
             .create(with_namespace!(
                 CreateTaskRequest {
                     container_id: id.clone(),
@@ -124,7 +125,9 @@ impl Containerd {
                 },
                 NAMESPACE
             ))
-            .await?;
+            .await?
+            .into_inner()
+            .pid;
         tasks
             .start(with_namespace!(
                 StartRequest {
@@ -135,7 +138,7 @@ impl Containerd {
             ))
             .await?;
 
-        Ok(())
+        Ok(pid)
     }
 
     /// Stop and delete every container belonging to `pod`.
