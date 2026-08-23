@@ -13,7 +13,9 @@ use crate::service::ApiService;
 /// must start and end with an alphanumeric character, max 253 characters.
 fn validate_dns1123_label(value: &str, field: &str) -> Result<(), Status> {
     if value.is_empty() {
-        return Err(Status::invalid_argument(format!("{field} must not be empty")));
+        return Err(Status::invalid_argument(format!(
+            "{field} must not be empty"
+        )));
     }
     if value.len() > 253 {
         return Err(Status::invalid_argument(format!(
