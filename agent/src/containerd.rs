@@ -141,6 +141,11 @@ impl Containerd {
         Ok(pid)
     }
 
+    /// Ids of the containers labelled as belonging to `pod`.
+    pub async fn pod_container_ids(&self, pod: &str) -> Result<Vec<String>, Status> {
+        self.pod_containers(pod).await
+    }
+
     /// Stop and delete every container belonging to `pod`.
     /// Containers are first asked to stop with SIGTERM (SIGKILL when `force`),
     /// then killed for good if they are still alive after `grace_period`.

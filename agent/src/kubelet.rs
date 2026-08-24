@@ -33,7 +33,9 @@ impl KubeletService {
         self.containerd
             .remove_pod(pod_id, ROLLBACK_GRACE_PERIOD, true)
             .await
-            .map_err(|error| eprintln!("agent: failed to roll back containers of {pod_id}: {error}"))
+            .map_err(|error| {
+                eprintln!("agent: failed to roll back containers of {pod_id}: {error}")
+            })
             .ok();
 
         // Delete every network attached to the pod
@@ -41,12 +43,14 @@ impl KubeletService {
             self.cni
                 .delete_network(entry.workload.clone(), entry.network.clone())
                 .await
-                .map_err(|error| eprintln!(
-                    "agent: failed to roll back network {} for {}/{}: {error}",
-                    entry.network.network_name,
-                    entry.workload.workload_name,
-                    entry.workload.instance_name
-                ))
+                .map_err(|error| {
+                    eprintln!(
+                        "agent: failed to roll back network {} for {}/{}: {error}",
+                        entry.network.network_name,
+                        entry.workload.workload_name,
+                        entry.workload.instance_name
+                    )
+                })
                 .ok();
         }
     }
@@ -58,7 +62,6 @@ impl KubeletService {
         namespace: &str,
         attached: &mut Vec<AttachedContainer>,
     ) -> Result<(), Status> {
-
         let workload = WorkloadRef {
             workload_name: pod_id.to_string(),
             instance_name: namespace.to_string(),
@@ -76,7 +79,10 @@ impl KubeletService {
                 network: network.clone(),
             });
 
-            println!("Workload: {:?} | Network: {:?} | PID: {:?}", workload, network, pid);
+            println!(
+                "Workload: {:?} | Network: {:?} | PID: {:?}",
+                workload, network, pid
+            );
 
             // Attach the running container to its tenant network.
             self.cni
@@ -163,6 +169,35 @@ impl Kubelet for KubeletService {
 
         println!("Deleting pod {}", request.pod_id);
 
+        // Detaching every container network before deleting them
+        let namespace = namespace_of(&request.pod_id);
+        let prefix = format!("{}-", request.pod_id);
+        for id in self.containerd.pod_container_ids(&request.pod_id).await? {
+            let Some(container) = id.strip_prefix(&prefix) else {
+                eprintln!("agent: skipping unrecognised container id {id}");
+                continue;
+            };
+            self.cni
+                .delete_network(
+                    WorkloadRef {
+                        workload_name: request.pod_id.clone(),
+                        instance_name: namespace.to_string(),
+                    },
+                    NetworkRef {
+                        network_name: container.to_string(),
+                        vlan_id: DEFAULT_VLAN_ID,
+                    },
+                )
+                .await
+                .map_err(|error| {
+                    eprintln!(
+                        "agent: failed to detach network {container} of {}: {error}",
+                        request.pod_id
+                    )
+                })
+                .ok();
+        }
+
         self.containerd
             .remove_pod(&request.pod_id, grace_period, request.force)
             .await?;
@@ -181,4 +216,12 @@ struct AttachedContainer {
 /// encoded into the id returned by `apply_pod` instead of travelling next to it.
 fn pod_id(namespace: &str, name: &str) -> String {
     format!("{namespace}-{name}")
+}
+
+/// Recovers the namespace encoded at the start of a pod id.
+fn namespace_of(pod_id: &str) -> &str {
+    pod_id
+        .split_once('-')
+        .map(|(namespace, _)| namespace)
+        .unwrap_or(DEFAULT_NAMESPACE)
 }
