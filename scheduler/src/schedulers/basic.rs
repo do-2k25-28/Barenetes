@@ -6,18 +6,18 @@ use tonic::{Request, Response, Status};
 /// Does it by averaging the cpu and memory usage.
 ///
 /// Ex: 66% cpu usage with 33% memory usage ≈ 50% general usage
-fn calculate_general_usage(node: &Node) -> f32 {
-    let capacity = node.capacity.as_ref().expect("node capacity should be set");
-    let allocatable = node
-        .allocatable
-        .as_ref()
-        .expect("node allocatable should be set");
+///
+/// Returns `None` if the node is missing capacity or allocatable data,
+/// which can happen with bad data coming over the network.
+fn calculate_general_usage(node: &Node) -> Option<f32> {
+    let capacity = node.capacity.as_ref()?;
+    let allocatable = node.allocatable.as_ref()?;
 
     let cpu = (capacity.cpu as f32 - allocatable.cpu as f32) / capacity.cpu as f32;
 
     let memory = (capacity.memory as f32 - allocatable.memory as f32) / capacity.memory as f32;
 
-    (cpu + memory) / 2.0
+    Some((cpu + memory) / 2.0)
 }
 
 /**
@@ -59,6 +59,7 @@ impl Scheduler for BasicScheduler {
             // Don't schedule on nodes that aren't ready
             .filter(|node| node.status() == NodeStatus::Ready)
             // Only keep nodes that have the capacity to run the pod
+            .filter(|node| node.capacity.is_some())
             .filter(|node| {
                 node.allocatable.as_ref().is_some_and(|allocatable| {
                     allocatable.cpu > resources.cpu && allocatable.memory > resources.memory
@@ -76,7 +77,16 @@ impl Scheduler for BasicScheduler {
             .ok_or(Status::resource_exhausted("No valid candidate found"))?;
 
         for candidate in candidates.iter() {
-            if calculate_general_usage(elected) > calculate_general_usage(candidate) {
+            let (Some(elected_usage), Some(candidate_usage)) = (
+                calculate_general_usage(elected),
+                calculate_general_usage(candidate),
+            ) else {
+                // Silently ignore nodes with malformed capacity/allocatable data
+                // instead of panicking on bad data coming over the network.
+                continue;
+            };
+
+            if elected_usage > candidate_usage {
                 elected = candidate;
             }
         }
@@ -186,7 +196,7 @@ mod tests {
             },
         );
 
-        assert_eq!(calculate_general_usage(&node), 0.0);
+        assert_eq!(calculate_general_usage(&node), Some(0.0));
     }
 
     #[test]
@@ -203,7 +213,7 @@ mod tests {
         );
         // Half the CPU is used and half the memory is used
         // therefore general usage should be 0.5 (50%)
-        assert_eq!(calculate_general_usage(&node), 0.5);
+        assert_eq!(calculate_general_usage(&node), Some(0.5));
     }
 
     #[test]
@@ -216,6 +226,6 @@ mod tests {
             Resources { cpu: 0, memory: 0 },
         );
 
-        assert_eq!(calculate_general_usage(&node), 1.0);
+        assert_eq!(calculate_general_usage(&node), Some(1.0));
     }
 }
