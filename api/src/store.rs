@@ -226,7 +226,7 @@ impl Store {
     }
 }
 
-fn pod_key(pod: &PodDetail) -> (String, String) {
+pub(crate) fn pod_key(pod: &PodDetail) -> (String, String) {
     let namespace = pod
         .core
         .as_ref()

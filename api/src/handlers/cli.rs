@@ -204,15 +204,7 @@ mod tests {
     }
 
     fn pod_sort_key(pod: &PodDetail) -> (String, String) {
-        let core = pod.core.as_ref();
-        (
-            core.and_then(|c| c.spec.as_ref())
-                .map(|s| s.namespace.clone())
-                .unwrap_or_default(),
-            core.and_then(|c| c.pod.as_ref())
-                .map(|p| p.name.clone())
-                .unwrap_or_default(),
-        )
+        crate::store::pod_key(pod)
     }
 
     #[tokio::test]
