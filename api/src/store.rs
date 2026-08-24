@@ -72,6 +72,30 @@ impl Store {
             .remove(&(namespace.to_string(), name.to_string()))
     }
 
+    /// Looks up the pod by (namespace, name) and applies `mutate` to it, then publishes
+    /// a MODIFIED event, all under a single write-lock guard so a watcher can never
+    /// observe a stale read racing the update. Returns the updated pod, or `None` if
+    /// no pod exists for that key.
+    pub async fn update_pod_status<F>(
+        &self,
+        namespace: &str,
+        name: &str,
+        mutate: F,
+    ) -> Option<PodDetail>
+    where
+        F: FnOnce(&mut PodDetail),
+    {
+        let mut pods = self.pods.write().await;
+        let pod = pods.get_mut(&(namespace.to_string(), name.to_string()))?;
+        mutate(pod);
+        let updated = pod.clone();
+        self.publish_pod_event(WatchPodEvent {
+            event_type: EventType::Modified as i32,
+            pod: Some(updated.clone()),
+        });
+        Some(updated)
+    }
+
     /// Inserts or replaces a node and records this call as a liveness heartbeat,
     /// then publishes the resulting ADDED (first report) or MODIFIED event while
     /// still holding the write guard, so a watcher can never observe MODIFIED
@@ -89,14 +113,6 @@ impl Store {
             event_type: event_type as i32,
             node: Some(node),
         });
-
-    /// Inserts or replaces a node, and records this call as a liveness heartbeat.
-    pub async fn upsert_node(&self, node: Node) {
-        self.node_last_seen
-            .write()
-            .await
-            .insert(node.name.clone(), Instant::now());
-        self.nodes.write().await.insert(node.name.clone(), node);
     }
 
     pub async fn get_node(&self, name: &str) -> Option<Node> {

@@ -79,13 +79,16 @@ impl ApiService {
 
 #[cfg(test)]
 mod tests {
-    use proto::api::v1::{UpdatePodStatusRequest, UpdatePodStatusResponse};
+    use proto::api::v1::{
+        UpdateNodeStatusRequest, UpdatePodStatusRequest, UpdatePodStatusResponse,
+    };
     use proto::shared::v1::{
-        ContainerStatus, EventType, Pod, PodSpec, PodStatus, PodWithSpec, Resources, State,
+        ContainerStatus, EventType, NodeStatus, Pod, PodSpec, PodStatus, PodWithSpec, Resources,
+        State,
     };
     use tonic::{Code, Request};
 
-    use crate::test_support;
+    use crate::test_support::{self, node};
 
     fn update_request(namespace: &str, name: &str) -> Request<UpdatePodStatusRequest> {
         Request::new(UpdatePodStatusRequest {
@@ -228,5 +231,83 @@ mod tests {
         let err = service.update_pod_status_impl(request).await.unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
         assert_eq!(err.message(), "missing pod namespace");
+    }
+
+    fn update_node_status_request(
+        name: &str,
+        status: NodeStatus,
+    ) -> Request<UpdateNodeStatusRequest> {
+        Request::new(UpdateNodeStatusRequest {
+            node: Some(node(name, status)),
+        })
+    }
+
+    #[tokio::test]
+    async fn test_update_node_status_first_seen_publishes_added() {
+        let service = test_support::service();
+        let mut events = service.store.subscribe_node_events();
+
+        service
+            .update_node_status_impl(update_node_status_request("node-1", NodeStatus::Ready))
+            .await
+            .expect("update_node_status with a node should succeed");
+
+        let event = events
+            .try_recv()
+            .expect("a first-seen node should publish an event");
+        assert_eq!(event.event_type, EventType::Added as i32);
+        assert_eq!(event.node, Some(node("node-1", NodeStatus::Ready)));
+    }
+
+    #[tokio::test]
+    async fn test_update_node_status_known_node_publishes_modified() {
+        let service = test_support::service();
+        let mut events = service.store.subscribe_node_events();
+
+        service
+            .update_node_status_impl(update_node_status_request("node-1", NodeStatus::Ready))
+            .await
+            .unwrap();
+        let _ = events.try_recv(); // drain the ADDED event from the first call
+
+        service
+            .update_node_status_impl(update_node_status_request("node-1", NodeStatus::NotReady))
+            .await
+            .expect("update_node_status for a known node should succeed");
+
+        let event = events
+            .try_recv()
+            .expect("a known-node update should publish an event");
+        assert_eq!(event.event_type, EventType::Modified as i32);
+        assert_eq!(event.node, Some(node("node-1", NodeStatus::NotReady)));
+        assert_eq!(
+            service.store.get_node("node-1").await.map(|n| n.status),
+            Some(NodeStatus::NotReady as i32)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_node_status_missing_node_rejected() {
+        let service = test_support::service();
+
+        let err = service
+            .update_node_status_impl(Request::new(UpdateNodeStatusRequest { node: None }))
+            .await
+            .expect_err("a request without a node should be rejected");
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_update_node_status_blank_name_rejected() {
+        let service = test_support::service();
+
+        let err = service
+            .update_node_status_impl(update_node_status_request("", NodeStatus::Ready))
+            .await
+            .expect_err("a blank node name should be rejected");
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert_eq!(err.message(), "missing node name");
     }
 }
