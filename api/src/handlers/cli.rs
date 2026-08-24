@@ -40,7 +40,7 @@ impl ApiService {
         &self,
         request: Request<CreatePodRequest>,
     ) -> Result<Response<CreatePodResponse>, Status> {
-        let pod_with_spec = request
+        let mut pod_with_spec = request
             .into_inner()
             .pod
             .ok_or_else(|| Status::invalid_argument("pod is required"))?;
@@ -84,7 +84,6 @@ impl ApiService {
             }
         }
 
-        let mut pod_with_spec = pod_with_spec;
         if let Some(pod) = pod_with_spec.pod.as_mut() {
             pod.status = PodStatus::Pending as i32;
         }
