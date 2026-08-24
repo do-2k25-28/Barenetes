@@ -339,8 +339,8 @@ mod tests {
         assert_eq!(got, expected);
     }
 
-    fn create_pod_request(namespace: &str, name: &str) -> Request<CreatePodRequest> {
-        Request::new(CreatePodRequest {
+    fn create_pod_request_raw(namespace: &str, name: &str) -> CreatePodRequest {
+        CreatePodRequest {
             pod: Some(PodWithSpec {
                 pod: Some(Pod {
                     name: name.to_string(),
@@ -353,7 +353,11 @@ mod tests {
                     containers: vec![test_support::container("app", "busybox")],
                 }),
             }),
-        })
+        }
+    }
+
+    fn create_pod_request(namespace: &str, name: &str) -> Request<CreatePodRequest> {
+        Request::new(create_pod_request_raw(namespace, name))
     }
 
     #[tokio::test]
@@ -446,20 +450,11 @@ mod tests {
     #[tokio::test]
     async fn test_create_pod_missing_spec_is_invalid_argument() {
         let service = service();
-        let request = Request::new(CreatePodRequest {
-            pod: Some(PodWithSpec {
-                pod: Some(Pod {
-                    name: "my-pod".to_string(),
-                    status: PodStatus::Pending as i32,
-                    requests: None,
-                    limits: None,
-                }),
-                spec: None,
-            }),
-        });
+        let mut req = create_pod_request_raw("default", "my-pod");
+        req.pod.as_mut().unwrap().spec = None;
 
         let err = service
-            .create_pod_impl(request)
+            .create_pod_impl(Request::new(req))
             .await
             .expect_err("missing spec should fail");
 
@@ -517,23 +512,11 @@ mod tests {
     #[tokio::test]
     async fn test_create_pod_no_containers_is_invalid_argument() {
         let service = service();
-        let request = Request::new(CreatePodRequest {
-            pod: Some(PodWithSpec {
-                pod: Some(Pod {
-                    name: "my-pod".to_string(),
-                    status: PodStatus::Pending as i32,
-                    requests: None,
-                    limits: None,
-                }),
-                spec: Some(PodSpec {
-                    namespace: "default".to_string(),
-                    containers: vec![],
-                }),
-            }),
-        });
+        let mut req = create_pod_request_raw("default", "my-pod");
+        req.pod.as_mut().unwrap().spec.as_mut().unwrap().containers = vec![];
 
         let err = service
-            .create_pod_impl(request)
+            .create_pod_impl(Request::new(req))
             .await
             .expect_err("no containers should fail");
 
@@ -543,25 +526,11 @@ mod tests {
     #[tokio::test]
     async fn test_create_pod_container_missing_image_is_invalid_argument() {
         let service = service();
-        let mut container = test_support::container("app", "busybox");
-        container.image = String::new();
-        let request = Request::new(CreatePodRequest {
-            pod: Some(PodWithSpec {
-                pod: Some(Pod {
-                    name: "my-pod".to_string(),
-                    status: PodStatus::Pending as i32,
-                    requests: None,
-                    limits: None,
-                }),
-                spec: Some(PodSpec {
-                    namespace: "default".to_string(),
-                    containers: vec![container],
-                }),
-            }),
-        });
+        let mut req = create_pod_request_raw("default", "my-pod");
+        req.pod.as_mut().unwrap().spec.as_mut().unwrap().containers[0].image = String::new();
 
         let err = service
-            .create_pod_impl(request)
+            .create_pod_impl(Request::new(req))
             .await
             .expect_err("missing image should fail");
 
@@ -571,24 +540,11 @@ mod tests {
     #[tokio::test]
     async fn test_create_pod_empty_container_name_is_invalid_argument() {
         let service = service();
-        let container = test_support::container("", "busybox");
-        let request = Request::new(CreatePodRequest {
-            pod: Some(PodWithSpec {
-                pod: Some(Pod {
-                    name: "my-pod".to_string(),
-                    status: PodStatus::Pending as i32,
-                    requests: None,
-                    limits: None,
-                }),
-                spec: Some(PodSpec {
-                    namespace: "default".to_string(),
-                    containers: vec![container],
-                }),
-            }),
-        });
+        let mut req = create_pod_request_raw("default", "my-pod");
+        req.pod.as_mut().unwrap().spec.as_mut().unwrap().containers[0].name = String::new();
 
         let err = service
-            .create_pod_impl(request)
+            .create_pod_impl(Request::new(req))
             .await
             .expect_err("empty container name should fail");
 
@@ -598,26 +554,18 @@ mod tests {
     #[tokio::test]
     async fn test_create_pod_duplicate_container_names_is_invalid_argument() {
         let service = service();
-        let request = Request::new(CreatePodRequest {
-            pod: Some(PodWithSpec {
-                pod: Some(Pod {
-                    name: "my-pod".to_string(),
-                    status: PodStatus::Pending as i32,
-                    requests: None,
-                    limits: None,
-                }),
-                spec: Some(PodSpec {
-                    namespace: "default".to_string(),
-                    containers: vec![
-                        test_support::container("app", "busybox"),
-                        test_support::container("app", "nginx"),
-                    ],
-                }),
-            }),
-        });
+        let mut req = create_pod_request_raw("default", "my-pod");
+        req.pod
+            .as_mut()
+            .unwrap()
+            .spec
+            .as_mut()
+            .unwrap()
+            .containers
+            .push(test_support::container("app", "nginx"));
 
         let err = service
-            .create_pod_impl(request)
+            .create_pod_impl(Request::new(req))
             .await
             .expect_err("duplicate container names should fail");
 
