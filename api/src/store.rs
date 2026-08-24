@@ -72,13 +72,23 @@ impl Store {
             .remove(&(namespace.to_string(), name.to_string()))
     }
 
-    /// Inserts or replaces a node, and records this call as a liveness heartbeat.
-    pub async fn upsert_node(&self, node: Node) {
-        self.node_last_seen
-            .write()
-            .await
-            .insert(node.name.clone(), Instant::now());
-        self.nodes.write().await.insert(node.name.clone(), node);
+    /// Inserts or replaces a node and records this call as a liveness heartbeat,
+    /// then publishes the resulting ADDED (first report) or MODIFIED event while
+    /// still holding the write guard, so a watcher can never observe MODIFIED
+    /// before the ADDED of the node it refers to
+    pub async fn upsert_and_publish_node(&self, node: Node) {
+        let mut last_seen = self.node_last_seen.write().await;
+        last_seen.insert(node.name.clone(), Instant::now());
+
+        let mut nodes = self.nodes.write().await;
+        let event_type = match nodes.insert(node.name.clone(), node.clone()) {
+            None => EventType::Added,
+            Some(_) => EventType::Modified,
+        };
+        self.publish_node_event(WatchNodeEvent {
+            event_type: event_type as i32,
+            node: Some(node),
+        });
     }
 
     pub async fn get_node(&self, name: &str) -> Option<Node> {
@@ -219,16 +229,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_upsert_node_replaces_existing() {
+    async fn test_upsert_and_publish_node_publishes_added_then_modified() {
         let store = Store::new();
-        store
-            .upsert_node(test_support::node("node-1", NodeStatus::Ready))
-            .await;
+        let mut events = store.subscribe_node_events();
 
         store
-            .upsert_node(test_support::node("node-1", NodeStatus::NotReady))
+            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
+            .await;
+        store
+            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::NotReady))
             .await;
 
+        assert_eq!(
+            events.try_recv().unwrap().event_type,
+            EventType::Added as i32
+        );
+        assert_eq!(
+            events.try_recv().unwrap().event_type,
+            EventType::Modified as i32
+        );
         let nodes = store.list_nodes().await;
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0].status, NodeStatus::NotReady as i32);
@@ -271,7 +290,7 @@ mod tests {
     async fn test_sweep_stale_nodes_marks_unresponsive_node_not_ready() {
         let store = Store::new();
         store
-            .upsert_node(test_support::node("node-1", NodeStatus::Ready))
+            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
             .await;
         let mut events = store.subscribe_node_events();
 
@@ -291,7 +310,7 @@ mod tests {
     async fn test_sweep_stale_nodes_leaves_fresh_node_untouched() {
         let store = Store::new();
         store
-            .upsert_node(test_support::node("node-1", NodeStatus::Ready))
+            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
             .await;
 
         tokio::time::advance(Duration::from_secs(1)).await;
@@ -303,15 +322,15 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn test_upsert_node_refreshes_liveness() {
+    async fn test_upsert_and_publish_node_refreshes_liveness() {
         let store = Store::new();
         store
-            .upsert_node(test_support::node("node-1", NodeStatus::Ready))
+            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
             .await;
 
         tokio::time::advance(NODE_STALE_TIMEOUT - Duration::from_secs(1)).await;
         store
-            .upsert_node(test_support::node("node-1", NodeStatus::Ready))
+            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
             .await; // heartbeat
 
         tokio::time::advance(NODE_STALE_TIMEOUT - Duration::from_secs(1)).await;
@@ -324,7 +343,7 @@ mod tests {
     async fn test_sweep_stale_nodes_does_not_report_already_not_ready_node() {
         let store = Store::new();
         store
-            .upsert_node(test_support::node("node-1", NodeStatus::NotReady))
+            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::NotReady))
             .await;
 
         tokio::time::advance(NODE_STALE_TIMEOUT + Duration::from_secs(1)).await;
