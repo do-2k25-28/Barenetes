@@ -146,7 +146,7 @@ impl Store {
             let last_seen = self.node_last_seen.read().await;
             last_seen
                 .iter()
-                .filter(|(_, seen)| now.saturating_duration_since(**seen) > timeout)
+                .filter(|(_, seen)| now.saturating_duration_since(**seen) >= timeout)
                 .map(|(name, _)| name.clone())
                 .collect()
         };
@@ -388,6 +388,19 @@ mod tests {
             .try_recv()
             .expect("a node MODIFIED event should have been published");
         assert_eq!(event.event_type, EventType::Modified as i32);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_sweep_stale_nodes_marks_node_stale_at_exact_timeout() {
+        let store = Store::new();
+        store
+            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
+            .await;
+
+        tokio::time::advance(NODE_STALE_TIMEOUT).await;
+        let stale = store.sweep_stale_nodes(NODE_STALE_TIMEOUT).await;
+
+        assert_eq!(stale, vec!["node-1".to_string()]);
     }
 
     #[tokio::test(start_paused = true)]
