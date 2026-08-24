@@ -63,7 +63,12 @@ impl Store {
         if pods.contains_key(&key) {
             return false;
         }
+        let event = WatchPodEvent {
+            event_type: EventType::Added as i32,
+            pod: Some(pod.clone()),
+        };
         pods.insert(key, pod);
+        self.publish_pod_event(event);
         true
     }
 

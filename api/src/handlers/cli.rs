@@ -2,7 +2,7 @@
 use proto::api::v1::{
     CreatePodRequest, CreatePodResponse, DeletePodRequest, DeletePodResponse, GetNodeRequest,
     GetNodeResponse, GetPodRequest, GetPodResponse, ListNodesRequest, ListNodesResponse,
-    ListPodsRequest, ListPodsResponse, WatchPodEvent,
+    ListPodsRequest, ListPodsResponse,
 };
 use proto::shared::v1::{EventType, PodDetail, PodStatus};
 use tonic::{Request, Response, Status};
@@ -92,10 +92,6 @@ impl ApiService {
         if !self.store.create_pod(pod_detail.clone()).await {
             return Err(crate::errors::pod_already_exists(&namespace, &name));
         }
-        self.store.publish_pod_event(WatchPodEvent {
-            event_type: EventType::Added as i32,
-            pod: Some(pod_detail.clone()),
-        });
 
         Ok(Response::new(CreatePodResponse {
             pod: Some(pod_detail),
