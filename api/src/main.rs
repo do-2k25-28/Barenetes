@@ -19,6 +19,13 @@ use store::Store;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = "127.0.0.1:50052".parse()?;
 
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
     let store = Arc::new(Store::new());
 
     let liveness_store = store.clone();
@@ -33,13 +40,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let api_service = ApiService { store };
-
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
 
     tracing::info!(%addr, "API server starting");
 
