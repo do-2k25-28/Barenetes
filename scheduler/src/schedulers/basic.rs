@@ -1,5 +1,5 @@
 use proto::scheduler::v1::{SchedulePodRequest, SchedulePodResponse, scheduler_server::Scheduler};
-use proto::shared::v1::Resources;
+use proto::shared::v1::{Node, NodeStatus, Resources};
 use tonic::{Request, Response, Status};
 
 /// Calculate the general usage of the given node.
@@ -7,31 +7,17 @@ use tonic::{Request, Response, Status};
 ///
 /// Ex: 66% cpu usage with 33% memory usage ≈ 50% general usage
 fn calculate_general_usage(node: &Node) -> f32 {
-    let cpu = (node.capacity.cpu as f32 - node.allocatable.cpu as f32) / node.capacity.cpu as f32;
+    let capacity = node.capacity.as_ref().expect("node capacity should be set");
+    let allocatable = node
+        .allocatable
+        .as_ref()
+        .expect("node allocatable should be set");
 
-    let memory = (node.capacity.memory as f32 - node.allocatable.memory as f32)
-        / node.capacity.memory as f32;
+    let cpu = (capacity.cpu as f32 - allocatable.cpu as f32) / capacity.cpu as f32;
+
+    let memory = (capacity.memory as f32 - allocatable.memory as f32) / capacity.memory as f32;
 
     (cpu + memory) / 2.0
-}
-
-// Temporary redefinition of what's in shared/v1/node.proto
-// because it's not compiled by tonic as it's not currently used.
-
-#[derive(Debug, PartialEq)]
-pub enum NodeStatus {
-    Ready,
-    Cordon,
-    Drain,
-    NotReady,
-}
-
-#[derive(Debug)]
-pub struct Node {
-    name: String,
-    status: NodeStatus,
-    capacity: Resources,
-    allocatable: Resources,
 }
 
 /**
@@ -71,10 +57,12 @@ impl Scheduler for BasicScheduler {
             .nodes
             .iter()
             // Don't schedule on nodes that aren't ready
-            .filter(|node| matches!(node.status, NodeStatus::Ready))
+            .filter(|node| node.status() == NodeStatus::Ready)
             // Only keep nodes that have the capacity to run the pod
             .filter(|node| {
-                node.allocatable.cpu > resources.cpu && node.allocatable.memory > resources.memory
+                node.allocatable.as_ref().is_some_and(|allocatable| {
+                    allocatable.cpu > resources.cpu && allocatable.memory > resources.memory
+                })
             })
             .collect();
 
@@ -108,63 +96,63 @@ impl Default for BasicScheduler {
         let nodes = vec![
             Node {
                 name: String::from("Black Pearl"),
-                status: NodeStatus::Ready,
-                capacity: Resources {
+                status: NodeStatus::Ready.into(),
+                capacity: Some(Resources {
                     cpu: 8000,
                     memory: 32768,
-                },
-                allocatable: Resources {
+                }),
+                allocatable: Some(Resources {
                     cpu: 7800,
                     memory: 31000,
-                },
+                }),
             },
             Node {
                 name: String::from("Flying Dutchman"),
-                status: NodeStatus::Cordon,
-                capacity: Resources {
+                status: NodeStatus::Cordon.into(),
+                capacity: Some(Resources {
                     cpu: 4000,
                     memory: 16384,
-                },
-                allocatable: Resources {
+                }),
+                allocatable: Some(Resources {
                     cpu: 3900,
                     memory: 15200,
-                },
+                }),
             },
             Node {
                 name: String::from("Davy Jones' Locker"),
-                status: NodeStatus::Drain,
-                capacity: Resources {
+                status: NodeStatus::Drain.into(),
+                capacity: Some(Resources {
                     cpu: 16000,
                     memory: 65536,
-                },
-                allocatable: Resources {
+                }),
+                allocatable: Some(Resources {
                     cpu: 15800,
                     memory: 63000,
-                },
+                }),
             },
             Node {
                 name: String::from("Silent Mary"),
-                status: NodeStatus::NotReady,
-                capacity: Resources {
+                status: NodeStatus::NotReady.into(),
+                capacity: Some(Resources {
                     cpu: 2000,
                     memory: 8192,
-                },
-                allocatable: Resources {
+                }),
+                allocatable: Some(Resources {
                     cpu: 1900,
                     memory: 7000,
-                },
+                }),
             },
             Node {
                 name: String::from("Queen Anne's Revenge"),
-                status: NodeStatus::Ready,
-                capacity: Resources {
+                status: NodeStatus::Ready.into(),
+                capacity: Some(Resources {
                     cpu: 4000,
                     memory: 16384,
-                },
-                allocatable: Resources {
+                }),
+                allocatable: Some(Resources {
                     cpu: 3500,
                     memory: 14000,
-                },
+                }),
             },
         ];
 
@@ -179,9 +167,9 @@ mod tests {
     fn get_node(capacity: Resources, allocatable: Resources) -> Node {
         Node {
             name: String::from(""),
-            status: NodeStatus::Ready,
-            capacity,
-            allocatable,
+            status: NodeStatus::Ready.into(),
+            capacity: Some(capacity),
+            allocatable: Some(allocatable),
         }
     }
 
