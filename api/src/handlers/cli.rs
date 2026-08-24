@@ -81,7 +81,8 @@ impl ApiService {
         &self,
         _request: Request<DeletePodRequest>,
     ) -> Result<Response<DeletePodResponse>, Status> {
-        todo!("store.remove_pod, return NotFound if it didn't exist")
+        // TODO: store.remove_pod, return NotFound if it didn't exist
+        Err(Status::unimplemented("delete_pod is not yet implemented"))
     }
 
     pub async fn get_pod_impl(
