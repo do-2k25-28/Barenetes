@@ -2,9 +2,8 @@ syntax = "proto3";
 
 package shared.v1;
 
-import "shared/v1/resources.proto";
 import "shared/v1/container.proto";
-
+import "shared/v1/resources.proto";
 
 enum PodStatus {
   PENDING = 0;
@@ -30,4 +29,15 @@ message PodSpec {
 message PodWithSpec {
   Pod pod = 1;
   PodSpec spec = 2;
+}
+
+// Full pod view: spec + runtime state
+message PodDetail {
+  PodWithSpec core = 1;
+  repeated ContainerStatus container_statuses = 2;
+  optional string pod_ip = 3;
+  optional string message = 4;
+  Resources resource_usage = 5;
+  string node_name = 6;
+  optional string unschedulable_reason = 7;
 }

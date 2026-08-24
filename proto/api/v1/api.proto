@@ -1,3 +1,127 @@
 syntax = "proto3";
 
 package api.v1;
+
+import "shared/v1/container.proto";
+import "shared/v1/node.proto";
+import "shared/v1/pod.proto";
+import "shared/v1/resources.proto";
+
+// ─── CLI → API ────────────────────────────────────────────
+
+message CreatePodRequest {
+  shared.v1.PodWithSpec pod = 1;
+}
+message CreatePodResponse {
+  shared.v1.PodDetail pod = 1;
+}
+
+message DeletePodRequest {
+  string name = 1;
+  string namespace = 2;
+}
+message DeletePodResponse {
+  string name = 1;
+}
+
+message GetPodRequest {
+  string name = 1;
+  string namespace = 2;
+}
+message GetPodResponse {
+  shared.v1.PodDetail pod = 1;
+}
+
+message ListPodsRequest {}
+message ListPodsResponse {
+  repeated shared.v1.PodDetail pods = 1;
+}
+
+message GetNodeRequest {
+  string name = 1;
+}
+message GetNodeResponse {
+  shared.v1.Node node = 1;
+}
+
+message ListNodesRequest {}
+message ListNodesResponse {
+  repeated shared.v1.Node nodes = 1;
+}
+
+// ─── scheduler → API ──────────────────────────────────────────
+message WatchPodsRequest {} // Scheduler subscribes to all pod events to decide what to schedule
+
+message WatchPodEvent {
+  shared.v1.EventType event_type = 1;
+  shared.v1.PodDetail pod = 2;
+}
+
+message WatchNodesRequest {} // Scheduler subscribes to all node events to schedule against current capacity
+
+message WatchNodeEvent {
+  shared.v1.EventType event_type = 1;
+  shared.v1.Node node = 2;
+}
+
+message AssignPodRequest { // Scheduler reports the outcome of trying to place a pod
+  string name = 1;
+  string namespace = 2;
+  oneof outcome {
+    string node_name = 3; // scheduler placed the pod here
+    string unschedulable_reason = 4; // scheduler couldn't find a fit
+  }
+}
+message AssignPodResponse {}
+
+// ─── agent → API ────────────────────────────────────────────
+
+message UpdatePodStatusRequest {
+  shared.v1.PodWithSpec pod = 1; // desired spec, unchanged by this report
+  repeated shared.v1.ContainerStatus container_statuses = 2; // observed per-container state; empty means "no change"
+  optional string pod_ip = 3; // absent means "no change"
+  optional string message = 4; // absent means "no change"
+  shared.v1.Resources resource_usage = 5;
+  // node_name is not reportable here: node assignment is the scheduler's authority (AssignPod).
+}
+message UpdatePodStatusResponse {}
+
+message UpdateNodeStatusRequest {
+  shared.v1.Node node = 1;
+}
+message UpdateNodeStatusResponse {}
+
+message WatchDesiredStateRequest { // agent subscribes to desired state for its node
+  string node_name = 1;
+}
+
+message WatchDesiredStateEvent {
+  Action action = 1;
+  shared.v1.PodWithSpec pod = 2; // pod concerned by the event
+
+  enum Action {
+    RUN = 0;
+    STOP = 1;
+  }
+}
+
+// ─── Services ─────────────────────────────────────────────────
+service ApiServer {
+  // CLI → API
+  rpc CreatePod(CreatePodRequest) returns (CreatePodResponse);
+  rpc DeletePod(DeletePodRequest) returns (DeletePodResponse);
+  rpc GetPod(GetPodRequest) returns (GetPodResponse);
+  rpc ListPods(ListPodsRequest) returns (ListPodsResponse);
+  rpc GetNode(GetNodeRequest) returns (GetNodeResponse);
+  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
+
+  // scheduler → API
+  rpc WatchPods(WatchPodsRequest) returns (stream WatchPodEvent);
+  rpc WatchNodes(WatchNodesRequest) returns (stream WatchNodeEvent);
+  rpc AssignPod(AssignPodRequest) returns (AssignPodResponse);
+
+  // agent → API
+  rpc UpdatePodStatus(UpdatePodStatusRequest) returns (UpdatePodStatusResponse);
+  rpc UpdateNodeStatus(UpdateNodeStatusRequest) returns (UpdateNodeStatusResponse);
+  rpc WatchDesiredState(WatchDesiredStateRequest) returns (stream WatchDesiredStateEvent);
+}
