@@ -74,26 +74,22 @@ impl Store {
 
     /// Looks up the pod by (namespace, name) and applies `mutate` to it, then publishes
     /// a MODIFIED event, all under a single write-lock guard so a watcher can never
-    /// observe a stale read racing the update. Returns the updated pod, or `None` if
-    /// no pod exists for that key.
-    pub async fn update_pod_status<F>(
-        &self,
-        namespace: &str,
-        name: &str,
-        mutate: F,
-    ) -> Option<PodDetail>
+    /// observe a stale read racing the update. Returns `true` if a pod was found and
+    /// updated, `false` if no pod exists for that key.
+    pub async fn update_pod_status<F>(&self, namespace: &str, name: &str, mutate: F) -> bool
     where
         F: FnOnce(&mut PodDetail),
     {
         let mut pods = self.pods.write().await;
-        let pod = pods.get_mut(&(namespace.to_string(), name.to_string()))?;
+        let Some(pod) = pods.get_mut(&(namespace.to_string(), name.to_string())) else {
+            return false;
+        };
         mutate(pod);
-        let updated = pod.clone();
         self.publish_pod_event(WatchPodEvent {
             event_type: EventType::Modified as i32,
-            pod: Some(updated.clone()),
+            pod: Some(pod.clone()),
         });
-        Some(updated)
+        true
     }
 
     /// Inserts or replaces a node and records this call as a liveness heartbeat,
@@ -260,31 +256,27 @@ mod tests {
             .await;
         let mut events = store.subscribe_pod_events();
 
-        let updated = store
+        let found = store
             .update_pod_status("default", "web", |pod| {
-                pod.pod_ip = "10.0.0.5".to_string();
+                pod.pod_ip = Some("10.0.0.5".to_string());
             })
-            .await
-            .expect("an existing pod should be updated");
+            .await;
 
-        assert_eq!(updated.pod_ip, "10.0.0.5");
+        assert!(found, "an existing pod should be updated");
         assert_eq!(
             store.get_pod("default", "web").await.unwrap().pod_ip,
-            "10.0.0.5"
+            Some("10.0.0.5".to_string())
         );
 
         let event = events
             .try_recv()
             .expect("a pod update should publish a MODIFIED event");
         assert_eq!(event.event_type, EventType::Modified as i32);
-        assert_eq!(event.pod.unwrap().pod_ip, "10.0.0.5");
+        assert_eq!(event.pod.unwrap().pod_ip, Some("10.0.0.5".to_string()));
 
         assert!(
-            store
-                .update_pod_status("default", "ghost", |_| {})
-                .await
-                .is_none(),
-            "updating a missing pod should return None"
+            !store.update_pod_status("default", "ghost", |_| {}).await,
+            "updating a missing pod should return false"
         );
     }
 
