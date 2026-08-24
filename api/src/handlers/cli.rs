@@ -65,7 +65,17 @@ impl ApiService {
                 "pod spec must include at least one container",
             ));
         }
+        let mut seen_container_names = std::collections::HashSet::new();
         for container in &spec.containers {
+            if container.name.is_empty() {
+                return Err(Status::invalid_argument("container name must not be empty"));
+            }
+            if !seen_container_names.insert(container.name.as_str()) {
+                return Err(Status::invalid_argument(format!(
+                    "duplicate container name '{}'",
+                    container.name
+                )));
+            }
             if container.image.is_empty() {
                 return Err(Status::invalid_argument(format!(
                     "container '{}' must specify an image",
@@ -560,6 +570,62 @@ mod tests {
             .create_pod_impl(request)
             .await
             .expect_err("missing image should fail");
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_create_pod_empty_container_name_is_invalid_argument() {
+        let service = service();
+        let container = test_support::container("", "busybox");
+        let request = Request::new(CreatePodRequest {
+            pod: Some(PodWithSpec {
+                pod: Some(Pod {
+                    name: "my-pod".to_string(),
+                    status: PodStatus::Pending as i32,
+                    requests: None,
+                    limits: None,
+                }),
+                spec: Some(PodSpec {
+                    namespace: "default".to_string(),
+                    containers: vec![container],
+                }),
+            }),
+        });
+
+        let err = service
+            .create_pod_impl(request)
+            .await
+            .expect_err("empty container name should fail");
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_create_pod_duplicate_container_names_is_invalid_argument() {
+        let service = service();
+        let request = Request::new(CreatePodRequest {
+            pod: Some(PodWithSpec {
+                pod: Some(Pod {
+                    name: "my-pod".to_string(),
+                    status: PodStatus::Pending as i32,
+                    requests: None,
+                    limits: None,
+                }),
+                spec: Some(PodSpec {
+                    namespace: "default".to_string(),
+                    containers: vec![
+                        test_support::container("app", "busybox"),
+                        test_support::container("app", "nginx"),
+                    ],
+                }),
+            }),
+        });
+
+        let err = service
+            .create_pod_impl(request)
+            .await
+            .expect_err("duplicate container names should fail");
 
         assert_eq!(err.code(), Code::InvalidArgument);
     }
