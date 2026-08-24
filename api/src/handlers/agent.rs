@@ -23,28 +23,55 @@ impl ApiService {
         // not-found message carries "<unknown>" placeholders instead.
         let reported = pod.ok_or_else(|| crate::errors::pod_not_found("<unknown>", "<unknown>"))?;
         let spec = reported.spec.unwrap_or_default();
-        let reported_pod = reported
-            .pod
-            .filter(|pod| !pod.name.is_empty())
-            .ok_or_else(|| Status::invalid_argument("missing pod name"))?;
-        if spec.namespace.is_empty() {
-            return Err(Status::invalid_argument("missing pod namespace"));
-        }
 
-        self.store
+        // Aggregate missing-field errors instead of first-error-wins, so a request missing
+        // both pod name and namespace doesn't have the namespace problem silently swallowed
+        // by an early return on the name check.
+        let mut missing = Vec::new();
+        if reported.pod.as_ref().is_none_or(|pod| pod.name.is_empty()) {
+            missing.push("pod name");
+        }
+        if spec.namespace.is_empty() {
+            missing.push("pod namespace");
+        }
+        if !missing.is_empty() {
+            return Err(Status::invalid_argument(format!(
+                "missing {}",
+                missing.join(", ")
+            )));
+        }
+        let reported_pod = reported.pod.unwrap();
+
+        let found = self
+            .store
             .update_pod_status(&spec.namespace, &reported_pod.name, |detail| {
                 // The agent owns the observed lifecycle status; the desired spec stays as
                 // stored, and node placement remains the scheduler's authority (AssignPod).
                 if let Some(core_pod) = detail.core.as_mut().and_then(|core| core.pod.as_mut()) {
                     core_pod.status = reported_pod.status;
                 }
-                detail.container_statuses = container_statuses;
-                detail.pod_ip = pod_ip;
-                detail.message = message;
-                detail.resource_usage = resource_usage;
+                // Only overwrite a runtime field when the agent actually
+                // reported a new value.
+                if !container_statuses.is_empty() {
+                    detail.container_statuses = container_statuses;
+                }
+                if pod_ip.is_some() {
+                    detail.pod_ip = pod_ip;
+                }
+                if message.is_some() {
+                    detail.message = message;
+                }
+                if resource_usage.is_some() {
+                    detail.resource_usage = resource_usage;
+                }
             })
-            .await
-            .ok_or_else(|| crate::errors::pod_not_found(&spec.namespace, &reported_pod.name))?;
+            .await;
+        if !found {
+            return Err(crate::errors::pod_not_found(
+                &spec.namespace,
+                &reported_pod.name,
+            ));
+        }
 
         Ok(Response::new(UpdatePodStatusResponse {}))
     }
@@ -108,8 +135,8 @@ mod tests {
                 name: "main".to_string(),
                 state: State::Active as i32,
             }],
-            pod_ip: "10.0.0.5".to_string(),
-            message: String::new(),
+            pod_ip: Some("10.0.0.5".to_string()),
+            message: None,
             resource_usage: Some(Resources {
                 cpu: 250,
                 memory: 128,
@@ -143,7 +170,7 @@ mod tests {
         assert_eq!(pod.container_statuses.len(), 1);
         assert_eq!(pod.container_statuses[0].name, "main");
         assert_eq!(pod.container_statuses[0].state, State::Active as i32);
-        assert_eq!(pod.pod_ip, "10.0.0.5");
+        assert_eq!(pod.pod_ip, Some("10.0.0.5".to_string()));
         assert_eq!(pod.resource_usage.as_ref().unwrap().cpu, 250);
 
         let event = events.try_recv().unwrap();
@@ -231,6 +258,11 @@ mod tests {
         let err = service.update_pod_status_impl(request).await.unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
         assert_eq!(err.message(), "missing pod namespace");
+
+        let request = update_request("", "");
+        let err = service.update_pod_status_impl(request).await.unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert_eq!(err.message(), "missing pod name, pod namespace");
     }
 
     fn update_node_status_request(
