@@ -4,7 +4,7 @@ use proto::api::v1::{
     GetNodeResponse, GetPodRequest, GetPodResponse, ListNodesRequest, ListNodesResponse,
     ListPodsRequest, ListPodsResponse,
 };
-use proto::shared::v1::{EventType, PodDetail, PodStatus};
+use proto::shared::v1::{PodDetail, PodStatus};
 use tonic::{Request, Response, Status};
 
 use crate::service::ApiService;
@@ -160,7 +160,7 @@ impl ApiService {
 
 #[cfg(test)]
 mod tests {
-    use proto::shared::v1::{NodeStatus, Pod, PodDetail, PodSpec, PodWithSpec};
+    use proto::shared::v1::{EventType, NodeStatus, Pod, PodDetail, PodSpec, PodWithSpec};
     use tonic::Code;
 
     use crate::test_support;
