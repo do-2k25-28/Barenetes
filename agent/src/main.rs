@@ -5,9 +5,11 @@ mod cni;
 mod containerd;
 mod kubelet;
 mod oci;
+mod vlan;
 
 const CONTAINERD_SOCKET: &str = "/run/containerd/containerd.sock";
 const CNI_SOCKET: &str = "/run/barenetes/cni.sock";
+const AGENT_STATE_DIR: &str = "/var/lib/barenetes/agent";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -15,7 +17,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let containerd = containerd::Containerd::connect(CONTAINERD_SOCKET).await?;
     let cni = cni::Cni::new(CNI_SOCKET);
-    let kubelet = kubelet::KubeletService::new(containerd, cni);
+    let vlans = vlan::VlanAllocations::new(AGENT_STATE_DIR)?;
+    let kubelet = kubelet::KubeletService::new(containerd, cni, vlans);
 
     println!("Kubelet service starting on {}", addr);
 

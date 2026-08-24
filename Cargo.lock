@@ -9,6 +9,7 @@ dependencies = [
  "containerd-client",
  "prost-types",
  "proto",
+ "serde",
  "serde_json",
  "sha2",
  "tokio",

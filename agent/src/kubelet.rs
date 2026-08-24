@@ -8,11 +8,10 @@ use tonic::{Request, Response, Status};
 
 use crate::cni::Cni;
 use crate::containerd::Containerd;
+use crate::vlan::VlanAllocations;
 
 const DEFAULT_NAMESPACE: &str = "default";
 const DEFAULT_INTERFACE: &str = "eth0";
-/// Single tenant network for now, every pod lands on this vlan.
-const DEFAULT_VLAN_ID: u32 = 1;
 const DEFAULT_GRACE_PERIOD: Duration = Duration::from_secs(30);
 /// Rolling back must not stall the failing call for the whole grace period.
 const ROLLBACK_GRACE_PERIOD: Duration = Duration::from_secs(5);
@@ -20,15 +19,52 @@ const ROLLBACK_GRACE_PERIOD: Duration = Duration::from_secs(5);
 pub struct KubeletService {
     containerd: Containerd,
     cni: Cni,
+    vlans: VlanAllocations,
 }
 
 impl KubeletService {
-    pub fn new(containerd: Containerd, cni: Cni) -> Self {
-        Self { containerd, cni }
+    pub fn new(containerd: Containerd, cni: Cni, vlans: VlanAllocations) -> Self {
+        Self {
+            containerd,
+            cni,
+            vlans,
+        }
     }
 
     /// Undo everything `apply_pod` created before failing.
-    async fn rollback(&self, pod_id: &str, attached: Vec<AttachedContainer>) {
+    async fn rollback(
+        &self,
+        pod_id: &str,
+        namespace: &str,
+        containers: &[proto::shared::v1::Container],
+        vlan: u32,
+    ) {
+        let workload = WorkloadRef {
+            workload_name: pod_id.to_string(),
+            instance_name: namespace.to_string(),
+        };
+
+        // Detach every network of the pod, also the ones that were never
+        // created in this round, so no stale record survives the rollback.
+        for container in containers {
+            self.cni
+                .delete_network(
+                    workload.clone(),
+                    NetworkRef {
+                        network_name: container.name.clone(),
+                        vlan_id: vlan,
+                    },
+                )
+                .await
+                .map_err(|error| {
+                    eprintln!(
+                        "agent: failed to roll back network {} for {pod_id}: {error}",
+                        container.name
+                    )
+                })
+                .ok();
+        }
+
         // Delete the pod
         self.containerd
             .remove_pod(pod_id, ROLLBACK_GRACE_PERIOD, true)
@@ -38,20 +74,9 @@ impl KubeletService {
             })
             .ok();
 
-        // Delete every network attached to the pod
-        for entry in attached.iter().rev() {
-            self.cni
-                .delete_network(entry.workload.clone(), entry.network.clone())
-                .await
-                .map_err(|error| {
-                    eprintln!(
-                        "agent: failed to roll back network {} for {}/{}: {error}",
-                        entry.network.network_name,
-                        entry.workload.workload_name,
-                        entry.workload.instance_name
-                    )
-                })
-                .ok();
+        // The pod is gone entirely, so its VLAN can be reused later.
+        if let Err(error) = self.vlans.release(pod_id) {
+            eprintln!("agent: failed to release VLAN of {pod_id}: {error}");
         }
     }
 
@@ -60,7 +85,7 @@ impl KubeletService {
         containers: &[proto::shared::v1::Container],
         pod_id: &str,
         namespace: &str,
-        attached: &mut Vec<AttachedContainer>,
+        vlan: u32,
     ) -> Result<(), Status> {
         let workload = WorkloadRef {
             workload_name: pod_id.to_string(),
@@ -70,21 +95,17 @@ impl KubeletService {
         for container in containers {
             let network = NetworkRef {
                 network_name: container.name.clone(),
-                vlan_id: DEFAULT_VLAN_ID,
+                vlan_id: vlan,
             };
 
             let pid = self.containerd.run_container(pod_id, container).await?;
-            attached.push(AttachedContainer {
-                workload: workload.clone(),
-                network: network.clone(),
-            });
 
             println!(
                 "Workload: {:?} | Network: {:?} | PID: {:?}",
                 workload, network, pid
             );
 
-            // Attach the running container to its tenant network.
+            // Attach the running container to its isolated tenant network.
             self.cni
                 .add_network(workload.clone(), network.clone(), pid, DEFAULT_INTERFACE)
                 .await?;
@@ -134,17 +155,25 @@ impl Kubelet for KubeletService {
 
         println!("Applying pod {pod_id}");
 
+        // Every container of the pod shares one isolated VLAN. The mapping is
+        // sticky: re-applying the same pod reuses its VLAN so existing network
+        // settings keep matching.
+        let vlan = self
+            .vlans
+            .allocate_for(&pod_id)
+            .map_err(|error| Status::internal(format!("cannot allocate a vlan: {error}")))?;
+
         // Deleting existing containers of the pod before creating the new ones
         self.containerd
             .remove_pod(&pod_id, DEFAULT_GRACE_PERIOD, true)
             .await?;
 
-        let mut attached = Vec::new();
         let outcome = self
-            .create_containers(&spec.containers, &pod_id, namespace, &mut attached)
+            .create_containers(&spec.containers, &pod_id, namespace, vlan)
             .await;
         if outcome.is_err() {
-            self.rollback(&pod_id, attached).await;
+            self.rollback(&pod_id, namespace, &spec.containers, vlan)
+                .await;
             return outcome.map(|_| Response::new(ApplyPodResponse { pod_id }));
         }
 
@@ -171,6 +200,7 @@ impl Kubelet for KubeletService {
 
         // Detaching every container network before deleting them
         let namespace = namespace_of(&request.pod_id);
+        let vlan = self.vlans.vlan_of(&request.pod_id).unwrap_or(0);
         let prefix = format!("{}-", request.pod_id);
         for id in self.containerd.pod_container_ids(&request.pod_id).await? {
             let Some(container) = id.strip_prefix(&prefix) else {
@@ -185,7 +215,7 @@ impl Kubelet for KubeletService {
                     },
                     NetworkRef {
                         network_name: container.to_string(),
-                        vlan_id: DEFAULT_VLAN_ID,
+                        vlan_id: vlan,
                     },
                 )
                 .await
@@ -202,14 +232,16 @@ impl Kubelet for KubeletService {
             .remove_pod(&request.pod_id, grace_period, request.force)
             .await?;
 
+        // The pod is gone, so its VLAN can be reused by a future pod.
+        if let Err(error) = self.vlans.release(&request.pod_id) {
+            eprintln!(
+                "agent: failed to release VLAN of {}: {error}",
+                request.pod_id
+            );
+        }
+
         Ok(Response::new(DeletePodResponse { success: true }))
     }
-}
-
-/// Networks attached by an in-flight `apply_pod`, kept around to be undone on failure.
-struct AttachedContainer {
-    workload: WorkloadRef,
-    network: NetworkRef,
 }
 
 /// `DeletePodRequest` carries no namespace, only a `pod_id`, so the namespace is
