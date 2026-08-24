@@ -28,7 +28,7 @@ fn validate_dns1123_label(value: &str, field: &str) -> Result<(), Status> {
     let chars_ok = value.chars().all(|c| is_alnum(c) || c == '-');
     if !starts_ok || !ends_ok || !chars_ok {
         return Err(Status::invalid_argument(format!(
-            "{field} '{value}' is invalid: must be lowercase alphanumeric characters or '-', \
+            "{field} is invalid: must be lowercase alphanumeric characters or '-', \
              and must start and end with an alphanumeric character"
         )));
     }
