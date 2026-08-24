@@ -5,6 +5,7 @@ mod store;
 mod telemetry;
 #[cfg(test)]
 mod test_support;
+mod validation;
 
 use std::sync::Arc;
 

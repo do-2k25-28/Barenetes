@@ -8,32 +8,7 @@ use proto::shared::v1::{PodDetail, PodStatus};
 use tonic::{Request, Response, Status};
 
 use crate::service::ApiService;
-
-/// Validates a DNS-1123-label-style identifier: lowercase alphanumeric or `-`,
-/// must start and end with an alphanumeric character, max 253 characters.
-fn validate_dns1123_label(value: &str, field: &str) -> Result<(), Status> {
-    if value.is_empty() {
-        return Err(Status::invalid_argument(format!(
-            "{field} must not be empty"
-        )));
-    }
-    if value.len() > 253 {
-        return Err(Status::invalid_argument(format!(
-            "{field} must be 253 characters or fewer"
-        )));
-    }
-    let is_alnum = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit();
-    let starts_ok = value.chars().next().is_some_and(is_alnum);
-    let ends_ok = value.chars().last().is_some_and(is_alnum);
-    let chars_ok = value.chars().all(|c| is_alnum(c) || c == '-');
-    if !starts_ok || !ends_ok || !chars_ok {
-        return Err(Status::invalid_argument(format!(
-            "{field} is invalid: must be lowercase alphanumeric characters or '-', \
-             and must start and end with an alphanumeric character"
-        )));
-    }
-    Ok(())
-}
+use crate::validation::validate_dns1123_subdomain;
 
 impl ApiService {
     pub async fn create_pod_impl(
@@ -57,8 +32,8 @@ impl ApiService {
             .ok_or_else(|| Status::invalid_argument("pod.spec is required"))?;
         let namespace = spec.namespace.clone();
 
-        validate_dns1123_label(&name, "pod name")?;
-        validate_dns1123_label(&namespace, "namespace")?;
+        validate_dns1123_subdomain(&name, "pod name")?;
+        validate_dns1123_subdomain(&namespace, "namespace")?;
 
         if spec.containers.is_empty() {
             return Err(Status::invalid_argument(
