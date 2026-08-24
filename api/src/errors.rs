@@ -14,7 +14,6 @@ pub(crate) fn missing_node(name: &str) -> Status {
     Status::invalid_argument(format!("missing node {name}"))
 }
 
-#[allow(dead_code)]
 pub(crate) fn pod_already_exists(namespace: &str, name: &str) -> Status {
     Status::already_exists(format!("pod {namespace}/{name} already exists"))
 }
