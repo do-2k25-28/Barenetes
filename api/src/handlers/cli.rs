@@ -119,7 +119,7 @@ mod tests {
     async fn test_get_node_returns_inserted_node() {
         let service = service();
         let node = test_support::node("node-1", NodeStatus::Ready);
-        service.store.upsert_node(node.clone()).await;
+        service.store.upsert_and_publish_node(node.clone()).await;
 
         let response = service
             .get_node_impl(get_node_request("node-1"))
@@ -219,7 +219,7 @@ mod tests {
     async fn test_list_nodes_returns_single_node() {
         let service = service();
         let node = test_support::node("node-1", NodeStatus::Ready);
-        service.store.upsert_node(node.clone()).await;
+        service.store.upsert_and_publish_node(node.clone()).await;
 
         let response = service
             .list_nodes_impl(Request::new(ListNodesRequest {}))
@@ -238,7 +238,7 @@ mod tests {
             test_support::node("node-c", NodeStatus::NotReady),
         ];
         for node in &expected {
-            service.store.upsert_node(node.clone()).await;
+            service.store.upsert_and_publish_node(node.clone()).await;
         }
 
         let response = service
