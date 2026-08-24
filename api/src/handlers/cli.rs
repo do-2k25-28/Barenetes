@@ -91,12 +91,7 @@ impl ApiService {
 
         let pod_detail = PodDetail {
             core: Some(pod_with_spec),
-            container_statuses: vec![],
-            pod_ip: None,
-            message: None,
-            resource_usage: None,
-            node_name: String::new(),
-            unschedulable_reason: None,
+            ..Default::default()
         };
 
         if !self.store.create_pod(pod_detail.clone()).await {
