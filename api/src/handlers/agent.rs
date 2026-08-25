@@ -1,8 +1,10 @@
 /// Agent-facing status reports and desired-state watch.
 use proto::api::v1::{
     UpdateNodeStatusRequest, UpdateNodeStatusResponse, UpdatePodStatusRequest,
-    UpdatePodStatusResponse, WatchDesiredStateRequest,
+    UpdatePodStatusResponse, WatchDesiredStateEvent, WatchDesiredStateRequest,
+    watch_desired_state_event,
 };
+use tokio_stream::StreamExt;
 use tonic::{Request, Response, Status};
 
 use crate::service::{ApiService, DesiredStateEventStream};
@@ -98,16 +100,33 @@ impl ApiService {
         &self,
         request: Request<WatchDesiredStateRequest>,
     ) -> Result<Response<DesiredStateEventStream>, Status> {
-        // The subscription is already scoped to this node, so no downstream filtering is needed.
         let node_name = request.into_inner().node_name;
         validate_dns1123_subdomain(&node_name, "node name")?;
 
-        let receiver = self.store.subscribe_desired_state_events(&node_name).await;
+        // Opening with the node's current desired set, closed by SYNCED, is what lets an
+        // agent reconcile on connect instead of missing whatever was published while it
+        // was away. The snapshot and the subscription share one guard, so nothing is lost
+        // between them.
+        let (assigned, receiver) = self
+            .store
+            .subscribe_desired_state_with_snapshot(&node_name)
+            .await;
 
-        Ok(Response::new(crate::service::broadcast_to_stream(
-            receiver,
-            "watch_desired_state",
-        )))
+        let snapshot = assigned.into_iter().map(|pod| {
+            Ok(WatchDesiredStateEvent {
+                action: watch_desired_state_event::Action::Run as i32,
+                pod: Some(pod),
+            })
+        });
+        let synced = std::iter::once(Ok(WatchDesiredStateEvent {
+            action: watch_desired_state_event::Action::Synced as i32,
+            pod: None,
+        }));
+
+        let opening = tokio_stream::iter(snapshot.chain(synced));
+        let live = crate::service::broadcast_to_stream(receiver, "watch_desired_state");
+
+        Ok(Response::new(Box::pin(opening.chain(live))))
     }
 }
 
@@ -118,8 +137,8 @@ mod tests {
         WatchDesiredStateEvent, watch_desired_state_event,
     };
     use proto::shared::v1::{
-        ContainerStatus, EventType, NodeStatus, Pod, PodSpec, PodStatus, PodWithSpec, Resources,
-        State,
+        ContainerStatus, EventType, NodeStatus, Pod, PodDetail, PodSpec, PodStatus, PodWithSpec,
+        Resources, State,
     };
     use tokio_stream::StreamExt;
     use tonic::{Code, Request};
@@ -367,6 +386,26 @@ mod tests {
         }
     }
 
+    /// Consumes the opening snapshot up to and including SYNCED, returning the pods it named.
+    async fn drain_snapshot(
+        stream: &mut DesiredStateEventStream,
+    ) -> Vec<Option<proto::shared::v1::PodWithSpec>> {
+        let mut snapshot = Vec::new();
+        loop {
+            let event = stream
+                .next()
+                .await
+                .expect("stream ended before SYNCED")
+                .expect("snapshot event should not be an error");
+            if event.action == watch_desired_state_event::Action::Synced as i32 {
+                assert_eq!(event.pod, None, "SYNCED carries no pod");
+                return snapshot;
+            }
+            assert_eq!(event.action, watch_desired_state_event::Action::Run as i32);
+            snapshot.push(event.pod);
+        }
+    }
+
     #[tokio::test]
     async fn test_watch_desired_state_receives_event_for_its_own_node() {
         let service = test_support::service();
@@ -375,6 +414,129 @@ mod tests {
             .await
             .unwrap()
             .into_inner();
+        assert!(
+            drain_snapshot(&mut stream).await.is_empty(),
+            "no pods are assigned to node-a yet"
+        );
+
+        service
+            .store
+            .publish_desired_state_event("node-a", run_event())
+            .await;
+
+        let event = stream
+            .next()
+            .await
+            .expect("stream ended")
+            .expect("event should not be an error");
+
+        assert_eq!(event.action, watch_desired_state_event::Action::Run as i32);
+    }
+
+    fn assigned_pod(namespace: &str, name: &str, node_name: &str) -> PodDetail {
+        let mut pod = test_support::pod_detail(namespace, name);
+        pod.node_name = node_name.to_string();
+        pod
+    }
+
+    #[tokio::test]
+    async fn test_watch_desired_state_opens_with_synced_when_nothing_is_assigned() {
+        let service = test_support::service();
+
+        let mut stream = service
+            .watch_desired_state_impl(watch_desired_state_request("node-a"))
+            .await
+            .unwrap()
+            .into_inner();
+
+        let first = stream
+            .next()
+            .await
+            .expect("stream ended")
+            .expect("event should not be an error");
+
+        assert_eq!(
+            first.action,
+            watch_desired_state_event::Action::Synced as i32
+        );
+        assert_eq!(first.pod, None);
+    }
+
+    #[tokio::test]
+    async fn test_watch_desired_state_opens_with_the_nodes_assigned_pods() {
+        let service = test_support::service();
+        let first_pod = assigned_pod("default", "pod-a", "node-a");
+        let second_pod = assigned_pod("default", "pod-b", "node-a");
+        service.store.upsert_pod(first_pod.clone()).await;
+        service.store.upsert_pod(second_pod.clone()).await;
+
+        let mut stream = service
+            .watch_desired_state_impl(watch_desired_state_request("node-a"))
+            .await
+            .unwrap()
+            .into_inner();
+
+        let mut snapshot = drain_snapshot(&mut stream).await;
+        snapshot.sort_by_key(|pod| {
+            pod.as_ref()
+                .and_then(|core| core.pod.as_ref())
+                .map(|pod| pod.name.clone())
+        });
+
+        assert_eq!(snapshot, vec![first_pod.core, second_pod.core]);
+    }
+
+    #[tokio::test]
+    async fn test_watch_desired_state_snapshot_excludes_other_nodes_pods() {
+        let service = test_support::service();
+        service
+            .store
+            .upsert_pod(assigned_pod("default", "mine", "node-a"))
+            .await;
+        service
+            .store
+            .upsert_pod(assigned_pod("default", "theirs", "node-b"))
+            .await;
+        // An unscheduled pod belongs to no node's desired set.
+        service
+            .store
+            .upsert_pod(test_support::pod_detail("default", "pending"))
+            .await;
+
+        let mut stream = service
+            .watch_desired_state_impl(watch_desired_state_request("node-a"))
+            .await
+            .unwrap()
+            .into_inner();
+
+        let snapshot = drain_snapshot(&mut stream).await;
+
+        assert_eq!(
+            snapshot.len(),
+            1,
+            "only node-a's pod belongs in its snapshot"
+        );
+        let name = snapshot[0]
+            .as_ref()
+            .and_then(|core| core.pod.as_ref())
+            .map(|pod| pod.name.as_str());
+        assert_eq!(name, Some("mine"));
+    }
+
+    #[tokio::test]
+    async fn test_watch_desired_state_streams_live_events_after_synced() {
+        let service = test_support::service();
+        service
+            .store
+            .upsert_pod(assigned_pod("default", "pod-a", "node-a"))
+            .await;
+
+        let mut stream = service
+            .watch_desired_state_impl(watch_desired_state_request("node-a"))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(drain_snapshot(&mut stream).await.len(), 1);
 
         service
             .store
@@ -425,6 +587,7 @@ mod tests {
             .await
             .unwrap()
             .into_inner();
+        drain_snapshot(&mut stream).await;
 
         service
             .store

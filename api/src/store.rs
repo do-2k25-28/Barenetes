@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use proto::api::v1::{WatchDesiredStateEvent, WatchNodeEvent, WatchPodEvent};
-use proto::shared::v1::{EventType, Node, NodeStatus, PodDetail};
+use proto::shared::v1::{EventType, Node, NodeStatus, PodDetail, PodWithSpec};
 use tokio::sync::{RwLock, broadcast};
 use tokio::time::Instant;
 
@@ -214,6 +214,27 @@ impl Store {
         if let Some(sender) = self.desired_state_channels.read().await.get(node_name) {
             let _ = sender.send(event);
         }
+    }
+
+    /// Snapshots the pods currently assigned to `node_name` and subscribes to its
+    /// desired-state channel under a single `pods` read guard, so no assignment or
+    /// deletion can slip between the two and be missed by the caller.
+    pub async fn subscribe_desired_state_with_snapshot(
+        &self,
+        node_name: &str,
+    ) -> (
+        Vec<PodWithSpec>,
+        broadcast::Receiver<WatchDesiredStateEvent>,
+    ) {
+        let pods = self.pods.read().await;
+        let assigned = pods
+            .values()
+            .filter(|pod| pod.node_name == node_name)
+            .filter_map(|pod| pod.core.clone())
+            .collect();
+        let receiver = self.subscribe_desired_state_events(node_name).await;
+
+        (assigned, receiver)
     }
 
     /// Get-or-create the channel for `node_name` and subscribe to it, evicting channels
