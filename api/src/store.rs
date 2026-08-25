@@ -92,10 +92,16 @@ impl Store {
     }
 
     /// Looks up the pod by (namespace, name) and applies `mutate` to it, then publishes
-    /// a MODIFIED event, all under a single write-lock guard so a watcher can never
+    /// `event_type`, all under a single write-lock guard so a watcher can never
     /// observe a stale read racing the update. Returns `true` if a pod was found and
     /// updated, `false` if no pod exists for that key.
-    pub async fn update_pod_status<F>(&self, namespace: &str, name: &str, mutate: F) -> bool
+    pub async fn update_and_publish_pod<F>(
+        &self,
+        namespace: &str,
+        name: &str,
+        event_type: EventType,
+        mutate: F,
+    ) -> bool
     where
         F: FnOnce(&mut PodDetail),
     {
@@ -105,10 +111,18 @@ impl Store {
         };
         mutate(pod);
         self.publish_pod_event(WatchPodEvent {
-            event_type: EventType::Modified as i32,
+            event_type: event_type as i32,
             pod: Some(pod.clone()),
         });
         true
+    }
+
+    pub async fn update_pod_status<F>(&self, namespace: &str, name: &str, mutate: F) -> bool
+    where
+        F: FnOnce(&mut PodDetail),
+    {
+        self.update_and_publish_pod(namespace, name, EventType::Modified, mutate)
+            .await
     }
 
     /// Inserts or replaces a node and records this call as a liveness heartbeat,
@@ -276,6 +290,26 @@ mod tests {
         assert!(!store.create_pod(duplicate).await);
 
         assert_eq!(store.get_pod("default", "my-pod").await, Some(original));
+    }
+
+    #[tokio::test]
+    async fn test_update_and_publish_pod_uses_the_given_event_type() {
+        let store = Store::new();
+        store
+            .upsert_pod(test_support::pod_detail("default", "my-pod"))
+            .await;
+        let mut events = store.subscribe_pod_events();
+
+        let found = store
+            .update_and_publish_pod("default", "my-pod", EventType::Scheduled, |pod| {
+                pod.node_name = "node-1".to_string();
+            })
+            .await;
+
+        assert!(found);
+        let event = events.try_recv().expect("an event should be published");
+        assert_eq!(event.event_type, EventType::Scheduled as i32);
+        assert_eq!(event.pod.unwrap().node_name, "node-1");
     }
 
     #[tokio::test]
