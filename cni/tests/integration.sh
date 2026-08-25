@@ -128,6 +128,15 @@ echo "[4/7] ADD d'un workload dans un autre VLAN"
 grpc add c tenant-b 200 "/proc/$NS_C/ns/net"
 
 echo "[5/7] connectivité même VLAN et isolation inter-VLAN"
+echo "  - adressage IPv4 de la gateway et du workload"
+ip -4 addr show dev barenetes0.100 | grep -q '10.100.1.1/16' \
+    || fail "gateway IPv4 absente de barenetes0.100"
+nsenter -t "$NS_A" -n ip -4 addr show dev eth0 | grep -q '10.100.1.2/16' \
+    || fail "adresse IPv4 absente du workload A"
+nsenter -t "$NS_A" -n ip route show default | grep -q 'default via 10.100.1.1 dev eth0' \
+    || fail "route IPv4 par défaut absente du workload A"
+nsenter -t "$NS_A" -n ping -c 1 -W 1 10.100.1.1 >/dev/null \
+    || fail "la gateway IPv4 du VLAN 100 n'est pas joignable"
 nsenter -t "$NS_A" -n ping -c 1 -W 1 10.100.1.3 >/dev/null
 if nsenter -t "$NS_A" -n ping -c 1 -W 1 10.200.1.2 >/dev/null 2>&1; then
     fail "le trafic inter-VLAN est encore autorisé"

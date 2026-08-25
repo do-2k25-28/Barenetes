@@ -71,7 +71,8 @@ modifier le réseau principal de la machine. Il exécute les étapes suivantes :
 3. Connexion de deux workloads au même VLAN avec `AddWorkloadNetwork`.
 4. Connexion d'un troisième workload à un autre VLAN.
 5. Vérification que les workloads du même VLAN communiquent et que le trafic
-   inter-VLAN est bloqué.
+   inter-VLAN est bloqué, avec contrôle de l'adresse IPv4 de la gateway, de
+   l'adresse du workload et de sa route par défaut.
 6. Vérification de `GetWorkloadNetwork`, de l'ADD idempotent et de
    `DeleteWorkloadNetwork`.
 7. Vérification que les fichiers d'état des workloads sont supprimés.
