@@ -95,13 +95,13 @@ impl ApiService {
 
     pub async fn watch_desired_state_impl(
         &self,
-        _request: Request<WatchDesiredStateRequest>,
+        request: Request<WatchDesiredStateRequest>,
     ) -> Result<Response<DesiredStateEventStream>, Status> {
-        // TODO: stream self.store.subscribe_desired_state_events(&request.get_ref().node_name)
-        // directly — the subscription is already scoped to that node, no downstream filtering needed
-        Err(Status::unimplemented(
-            "watch_desired_state is not yet implemented",
-        ))
+        // The subscription is already scoped to this node, so no downstream filtering is needed.
+        let node_name = request.into_inner().node_name;
+        let receiver = self.store.subscribe_desired_state_events(&node_name).await;
+
+        Ok(Response::new(crate::service::broadcast_to_stream(receiver)))
     }
 }
 
@@ -109,14 +109,18 @@ impl ApiService {
 mod tests {
     use proto::api::v1::{
         UpdateNodeStatusRequest, UpdatePodStatusRequest, UpdatePodStatusResponse,
+        WatchDesiredStateEvent, watch_desired_state_event,
     };
     use proto::shared::v1::{
         ContainerStatus, EventType, NodeStatus, Pod, PodSpec, PodStatus, PodWithSpec, Resources,
         State,
     };
+    use tokio_stream::StreamExt;
     use tonic::{Code, Request};
 
     use crate::test_support::{self, node};
+
+    use super::*;
 
     fn update_request(namespace: &str, name: &str) -> Request<UpdatePodStatusRequest> {
         Request::new(UpdatePodStatusRequest {
@@ -342,5 +346,64 @@ mod tests {
 
         assert_eq!(err.code(), Code::InvalidArgument);
         assert_eq!(err.message(), "missing node name");
+    }
+
+    fn watch_desired_state_request(node_name: &str) -> Request<WatchDesiredStateRequest> {
+        Request::new(WatchDesiredStateRequest {
+            node_name: node_name.to_string(),
+        })
+    }
+
+    fn run_event() -> WatchDesiredStateEvent {
+        WatchDesiredStateEvent {
+            action: watch_desired_state_event::Action::Run as i32,
+            pod: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_watch_desired_state_receives_event_for_its_own_node() {
+        let service = test_support::service();
+        let mut stream = service
+            .watch_desired_state_impl(watch_desired_state_request("node-a"))
+            .await
+            .unwrap()
+            .into_inner();
+
+        service
+            .store
+            .publish_desired_state_event("node-a", run_event())
+            .await;
+
+        let event = stream
+            .next()
+            .await
+            .expect("stream ended")
+            .expect("event should not be an error");
+
+        assert_eq!(event.action, watch_desired_state_event::Action::Run as i32);
+    }
+
+    #[tokio::test]
+    async fn test_watch_desired_state_does_not_receive_other_nodes_events() {
+        let service = test_support::service();
+        let mut stream = service
+            .watch_desired_state_impl(watch_desired_state_request("node-b"))
+            .await
+            .unwrap()
+            .into_inner();
+
+        service
+            .store
+            .publish_desired_state_event("node-a", run_event())
+            .await;
+
+        let result =
+            tokio::time::timeout(std::time::Duration::from_millis(50), stream.next()).await;
+
+        assert!(
+            result.is_err(),
+            "node-b's stream must not observe an event published for node-a"
+        );
     }
 }
