@@ -21,7 +21,7 @@ pub(crate) fn ensure_egress() -> io::Result<()> {
         "-C",
         "POSTROUTING",
         "-s",
-        "10.244.0.0/16",
+        "10.0.0.0/8",
         "!",
         "-o",
         BRIDGE_NAME,

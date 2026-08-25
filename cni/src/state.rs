@@ -152,8 +152,8 @@ mod tests {
             network_name: "tenant-a".into(),
             host_interface: "v123".into(),
             interface_name: "eth0".into(),
-            ip_address: "10.244.0.2".into(),
-            gateway: "10.244.0.1".into(),
+            ip_address: "10.100.1.2".into(),
+            gateway: "10.100.1.1".into(),
             vlan_id: 42,
             port_mappings: vec![PortMapping {
                 host_port: 8080,

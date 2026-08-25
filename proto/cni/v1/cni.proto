@@ -23,7 +23,7 @@ message NetworkRef {
   // Readable name for the network.
   string network_name = 1;
 
-  // Explicit bridge VLAN used to isolate this tenant (1-4094).
+  // Explicit bridge VLAN used to isolate this tenant (1-255).
   uint32 vlan_id = 2;
 }
 
@@ -37,10 +37,10 @@ message WorkloadNetwork {
   // Name of the interface in the workload, often "eth0".
   string interface_name = 2;
 
-  // IP address of the workload, for example "10.244.1.0".
+  // IP address of the workload, for example "10.100.1.2".
   string ip_address = 3;
 
-  // Gateway address, for example "10.244.1.1".
+  // Gateway address, for example "10.100.1.1".
   string gateway = 4;
 
   // Name of the dedicated tenant network.

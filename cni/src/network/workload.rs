@@ -39,6 +39,12 @@ pub(crate) fn add_workload_network(
                 "workload network already exists with different settings",
             ));
         }
+        if !succeeds(IP, &["link", "show", "dev", &record.host_interface])? {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "workload network state exists but its host interface is missing",
+            ));
+        }
         return Ok(record_to_network(&record));
     }
     for mapping in &request.port_mappings {

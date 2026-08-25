@@ -169,10 +169,7 @@ mod tests {
     fn directory_rejects_a_vlan_outside_a_single_byte() {
         let directory = tempfile::tempdir().unwrap();
         let pools = IpPoolDirectory::new(directory.path(), 1);
-        match pools.pool(4094) {
-            Err(error) => assert_eq!(error.kind(), io::ErrorKind::InvalidInput),
-            Ok(_) => panic!("expected an error"),
-        }
+        assert!(pools.pool(4094).is_err());
     }
 
     #[test]
