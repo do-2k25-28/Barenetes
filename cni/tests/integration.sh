@@ -36,7 +36,7 @@ trap cleanup EXIT
 
 [[ "$(id -u)" == 0 ]] || fail "ce test doit être exécuté en root"
 
-for command in cargo ip bridge iptables nsenter unshare; do
+for command in ip bridge iptables nsenter unshare; do
     command -v "$command" >/dev/null || fail "commande manquante: $command"
 done
 
@@ -48,8 +48,10 @@ fi
 [[ ! -e "$STATE_DIR" ]] || fail "$STATE_DIR existe déjà; supprimer ou sauvegarder cet état avant le test"
 STATE_OWNED=1
 
+[[ -x "$CNI_BIN" ]] || fail "binaire CNI absent; lancer d'abord: cargo build -p cni"
+[[ -x "$ROOT/target/debug/cni-integration-client" ]] || fail "client de test absent; lancer d'abord: cargo build -p cni"
+
 TMP_DIR=$(mktemp -d /tmp/barenetes-cni-integration.XXXXXX)
-cargo build -p cni --quiet
 
 echo "[1/7] démarrage du daemon CNI"
 BARENETES_NODE_ID=1 \

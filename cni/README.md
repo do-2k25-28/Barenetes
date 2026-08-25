@@ -59,6 +59,7 @@ cargo test -p cni
 cargo clippy -p cni --all-targets -- -D warnings
 
 # Test d'intégration réseau complet (root requis)
+cargo build -p cni
 sudo ./cni/tests/integration.sh
 ```
 
