@@ -7,7 +7,7 @@ const DEFAULT_SERVER_ADDR: &str = "http://127.0.0.1:50052";
 #[command(name = "barectl", version, about = "Command-line client for Barenetes")]
 pub struct Cli {
     /// Address of the API server (e.g. http://127.0.0.1:50052)
-    #[arg(long, global = true, env = "BARECTL_SERVER", default_value = DEFAULT_SERVER_ADDR)]
+    #[arg(long, global = true, env = "BARENETES_SERVER", default_value = DEFAULT_SERVER_ADDR)]
     pub server: String,
 
     #[command(subcommand)]
