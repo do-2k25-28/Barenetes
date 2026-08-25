@@ -27,7 +27,11 @@ pub(crate) fn mtu() -> io::Result<u32> {
 }
 
 pub(crate) fn succeeds(program: &str, arguments: &[&str]) -> io::Result<bool> {
-    Command::new(resolve(program)?)
+    let mut command = Command::new(resolve(program)?);
+    if program == "iptables" {
+        command.args(["-w", "5"]);
+    }
+    command
         .args(arguments)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
