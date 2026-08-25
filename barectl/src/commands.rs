@@ -3,11 +3,9 @@ use proto::api::v1::api_server_client::ApiServerClient;
 use proto::shared::v1::{Container, Pod, PodSpec, PodStatus, PodWithSpec, Resources};
 
 use crate::cli::CreatePodArgs;
+use crate::error::CliError;
 
-pub async fn create_pod(
-    server: &str,
-    args: CreatePodArgs,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn create_pod(server: &str, args: CreatePodArgs) -> Result<(), CliError> {
     let pod = PodWithSpec {
         pod: Some(Pod {
             name: args.name.clone(),
@@ -26,7 +24,12 @@ pub async fn create_pod(
         }),
     };
 
-    let mut client = ApiServerClient::connect(server.to_string()).await?;
+    let mut client = ApiServerClient::connect(server.to_string())
+        .await
+        .map_err(|source| CliError::Connect {
+            addr: server.to_string(),
+            source,
+        })?;
     client
         .create_pod(CreatePodRequest { pod: Some(pod) })
         .await?;
