@@ -32,7 +32,37 @@ cleanup() {
     [[ "$STATE_OWNED" == 1 ]] && rm -rf "$STATE_DIR"
     rm -rf "$TMP_DIR"
 }
-trap cleanup EXIT
+verify_cleanup() {
+    local clean=1
+    for pid in "$DAEMON_PID" "$NS_A" "$NS_B" "$NS_C"; do
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+            echo "FAIL: processus encore actif après nettoyage: $pid" >&2
+            clean=0
+        fi
+    done
+    if [[ -e "$SOCKET" ]]; then
+        echo "FAIL: socket encore présente après nettoyage: $SOCKET" >&2
+        clean=0
+    fi
+    if [[ "$STATE_OWNED" == 1 && -e "$STATE_DIR" ]]; then
+        echo "FAIL: état encore présent après nettoyage: $STATE_DIR" >&2
+        clean=0
+    fi
+    [[ "$clean" == 1 ]]
+}
+
+on_exit() {
+    local status=$?
+    trap - EXIT
+    cleanup
+    if verify_cleanup; then
+        echo "[post-nettoyage] OK"
+    else
+        status=1
+    fi
+    exit "$status"
+}
+trap on_exit EXIT
 
 [[ "$(id -u)" == 0 ]] || fail "ce test doit être exécuté en root"
 

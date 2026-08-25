@@ -63,6 +63,19 @@ cargo build -p cni
 sudo ./cni/tests/integration.sh
 ```
 
-Le test d'intégration crée temporairement des namespaces réseau, un bridge,
-des VLANs et un VXLAN. Il vérifie la connectivité dans un même VLAN,
-l'isolation entre VLANs, l'idempotence de l'API et le nettoyage de l'état.
+Le test d'intégration crée temporairement un réseau Linux isolé afin de ne pas
+modifier le réseau principal de la machine. Il exécute les étapes suivantes :
+
+1. Démarrage du daemon CNI et création du socket Unix.
+2. Vérification du bridge `barenetes0` et de l'interface VXLAN.
+3. Connexion de deux workloads au même VLAN avec `AddWorkloadNetwork`.
+4. Connexion d'un troisième workload à un autre VLAN.
+5. Vérification que les workloads du même VLAN communiquent et que le trafic
+   inter-VLAN est bloqué.
+6. Vérification de `GetWorkloadNetwork`, de l'ADD idempotent et de
+   `DeleteWorkloadNetwork`.
+7. Vérification que les fichiers d'état des workloads sont supprimés.
+
+Le script affiche `OK - intégration CNI complète réussie` uniquement si toutes
+les étapes réussissent. Il nettoie automatiquement les namespaces, le daemon,
+le socket et les fichiers d'état temporaires, même en cas d'échec.
