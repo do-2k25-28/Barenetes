@@ -10,7 +10,10 @@ use proto::api::v1::{
     UpdatePodStatusResponse, WatchDesiredStateEvent, WatchDesiredStateRequest, WatchNodeEvent,
     WatchNodesRequest, WatchPodEvent, WatchPodsRequest,
 };
-use tokio_stream::Stream;
+use tokio::sync::broadcast;
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
+use tokio_stream::{Stream, StreamExt};
 use tonic::{Request, Response, Status};
 
 use crate::store::Store;
@@ -22,6 +25,25 @@ pub type NodeEventStream =
     Pin<Box<dyn Stream<Item = Result<WatchNodeEvent, Status>> + Send + 'static>>;
 pub type DesiredStateEventStream =
     Pin<Box<dyn Stream<Item = Result<WatchDesiredStateEvent, Status>> + Send + 'static>>;
+
+/// A lagged receiver (client fell behind and the channel's ring buffer
+/// overwrote unread events) surfaces as one `Status::data_loss` item, which ends the RPC
+/// since the client's view is now inconsistent and it must reconnect and re-`List*` to
+/// resync, rather than keep consuming a stream with a hole in it.
+pub(crate) fn broadcast_to_stream<T>(
+    receiver: broadcast::Receiver<T>,
+) -> Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>
+where
+    T: Clone + Send + 'static,
+{
+    Box::pin(BroadcastStream::new(receiver).map(|item| {
+        item.map_err(|BroadcastStreamRecvError::Lagged(n)| {
+            Status::data_loss(format!(
+                "watch fell behind and missed {n} event(s); reconnect and re-list to resync"
+            ))
+        })
+    }))
+}
 
 // `allow(dead_code)` is temporary: no handler reads `self.store` yet since they're all `todo!()`
 // stubs. Remove once a track's handlers actually use it.
