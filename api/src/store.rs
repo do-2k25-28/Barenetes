@@ -1,3 +1,4 @@
+use prost::Message;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -25,6 +26,7 @@ pub const NODE_STALE_TIMEOUT: Duration =
 /// handlers to have empty bodies
 #[allow(dead_code)]
 pub struct Store {
+    client: Option<etcd_client::Client>,
     pods: RwLock<HashMap<(String, String), PodDetail>>,
     nodes: RwLock<HashMap<String, Node>>,
     node_last_seen: RwLock<HashMap<String, Instant>>,
@@ -36,8 +38,22 @@ pub struct Store {
 
 #[allow(dead_code)]
 impl Store {
+    // In-memory store (used for tests)
     pub fn new() -> Self {
         Self {
+            client: None,
+            pods: RwLock::new(HashMap::new()),
+            nodes: RwLock::new(HashMap::new()),
+            node_last_seen: RwLock::new(HashMap::new()),
+            pod_events: broadcast::channel(EVENT_CHANNEL_CAPACITY).0,
+            node_events: broadcast::channel(EVENT_CHANNEL_CAPACITY).0,
+            desired_state_channels: RwLock::new(HashMap::new()),
+        }
+    }
+
+    pub fn new_with_etcd(client: etcd_client::Client) -> Self {
+        Self {
+            client: Some(client),
             pods: RwLock::new(HashMap::new()),
             nodes: RwLock::new(HashMap::new()),
             node_last_seen: RwLock::new(HashMap::new()),
@@ -49,8 +65,15 @@ impl Store {
 
     /// Inserts a pod, replacing any existing entry with the same (namespace, name).
     pub async fn upsert_pod(&self, pod: PodDetail) {
-        let key = pod_key(&pod);
-        self.pods.write().await.insert(key, pod);
+        if let Some(ref client) = self.client {
+            let (namespace, name) = pod_key(&pod);
+            let etcd_key = pod_etcd_key(&namespace, &name);
+            let value = pod.encode_to_vec();
+            let _ = client.clone().put(etcd_key, value, None).await;
+        } else {
+            let key = pod_key(&pod);
+            self.pods.write().await.insert(key, pod);
+        }
     }
 
     /// Inserts a pod only if no existing pod shares its (namespace, name), atomically under
@@ -73,15 +96,37 @@ impl Store {
     }
 
     pub async fn get_pod(&self, namespace: &str, name: &str) -> Option<PodDetail> {
-        self.pods
-            .read()
-            .await
-            .get(&(namespace.to_string(), name.to_string()))
-            .cloned()
+        if let Some(ref client) = self.client {
+            let resp = client
+                .clone()
+                .get(pod_etcd_key(namespace, name), None)
+                .await
+                .ok()?;
+            let kv = resp.kvs().first()?;
+            PodDetail::decode(kv.value()).ok()
+        } else {
+            self.pods
+                .read()
+                .await
+                .get(&(namespace.to_string(), name.to_string()))
+                .cloned()
+        }
     }
 
     pub async fn list_pods(&self) -> Vec<PodDetail> {
-        self.pods.read().await.values().cloned().collect()
+        if let Some(ref client) = self.client {
+            let resp = client
+                .clone()
+                .get(pods_prefix(), Some(etcd_client::GetOptions::default().with_prefix()))
+                .await
+                .unwrap();
+            resp.kvs()
+                .iter()
+                .filter_map(|kv| PodDetail::decode(kv.value()).ok())
+                .collect()
+        } else {
+            self.pods.read().await.values().cloned().collect()
+        }
     }
 
     /// Removes the pod by (namespace, name) and publishes a DELETED event under the same
@@ -140,11 +185,31 @@ impl Store {
         let mut last_seen = self.node_last_seen.write().await;
         last_seen.insert(node.name.clone(), Instant::now());
 
-        let mut nodes = self.nodes.write().await;
-        let event_type = match nodes.insert(node.name.clone(), node.clone()) {
-            None => EventType::Added,
-            Some(_) => EventType::Modified,
+        let event_type = if let Some(ref client) = self.client {
+            let key = node_etcd_key(&node.name);
+            let is_new = client
+                .clone()
+                .get(key.clone(), None)
+                .await
+                .map(|resp| resp.kvs().is_empty())
+                .unwrap_or(true);
+            let _ = client
+                .clone()
+                .put(key, node.encode_to_vec(), None)
+                .await;
+            if is_new {
+                EventType::Added
+            } else {
+                EventType::Modified
+            }
+        } else {
+            let mut nodes = self.nodes.write().await;
+            match nodes.insert(node.name.clone(), node.clone()) {
+                None => EventType::Added,
+                Some(_) => EventType::Modified,
+            }
         };
+
         self.publish_node_event(WatchNodeEvent {
             event_type: event_type as i32,
             node: Some(node),
@@ -152,11 +217,33 @@ impl Store {
     }
 
     pub async fn get_node(&self, name: &str) -> Option<Node> {
-        self.nodes.read().await.get(name).cloned()
+        if let Some(ref client) = self.client {
+            let resp = client
+                .clone()
+                .get(node_etcd_key(name), None)
+                .await
+                .ok()?;
+            let kv = resp.kvs().first()?;
+            Node::decode(kv.value()).ok()
+        } else {
+            self.nodes.read().await.get(name).cloned()
+        }
     }
 
     pub async fn list_nodes(&self) -> Vec<Node> {
-        self.nodes.read().await.values().cloned().collect()
+        if let Some(ref client) = self.client {
+            let resp = client
+                .clone()
+                .get(nodes_prefix(), Some(etcd_client::GetOptions::default().with_prefix()))
+                .await
+                .unwrap();
+            resp.kvs()
+                .iter()
+                .filter_map(|kv| Node::decode(kv.value()).ok())
+                .collect()
+        } else {
+            self.nodes.read().await.values().cloned().collect()
+        }
     }
 
     /// Marks any node that hasn't reported a heartbeat within `timeout` as NOT_READY,
@@ -173,7 +260,24 @@ impl Store {
         };
 
         let mut newly_stale = Vec::new();
-        {
+
+        if let Some(ref client) = self.client {
+            for name in &stale_names {
+                let key = node_etcd_key(name);
+                if let Ok(resp) = client.clone().get(key.clone(), None).await
+                    && let Some(kv) = resp.kvs().first()
+                    && let Ok(mut node) = Node::decode(kv.value())
+                    && node.status != NodeStatus::NotReady as i32
+                {
+                    node.status = NodeStatus::NotReady as i32;
+                    let _ = client
+                        .clone()
+                        .put(key, node.encode_to_vec(), None)
+                        .await;
+                    newly_stale.push(node);
+                }
+            }
+        } else {
             let mut nodes = self.nodes.write().await;
             for name in &stale_names {
                 if let Some(node) = nodes.get_mut(name)
@@ -280,6 +384,22 @@ pub(crate) fn pod_key(pod: &PodDetail) -> (String, String) {
         .map(|inner| inner.name.clone())
         .unwrap_or_default();
     (namespace, name)
+}
+
+fn pod_etcd_key(namespace: &str, name: &str) -> Vec<u8> {
+    format!("/barenetes/pods/{namespace}/{name}").into_bytes()
+}
+
+fn node_etcd_key(name: &str) -> Vec<u8> {
+    format!("/barenetes/nodes/{name}").into_bytes()
+}
+
+fn pods_prefix() -> Vec<u8> {
+    b"/barenetes/pods/".to_vec()
+}
+
+fn nodes_prefix() -> Vec<u8> {
+    b"/barenetes/nodes/".to_vec()
 }
 
 #[cfg(test)]
