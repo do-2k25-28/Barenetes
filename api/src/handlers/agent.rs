@@ -69,7 +69,7 @@ impl ApiService {
                 }
             })
             .await
-            .map_err(|e| Status::unavailable(e.to_string()))?;
+            .map_err(|e| e.to_status())?;
         if !found {
             return Err(crate::errors::pod_not_found(
                 &spec.namespace,
@@ -95,7 +95,7 @@ impl ApiService {
         self.store
             .upsert_and_publish_node(node)
             .await
-            .map_err(|e| Status::unavailable(e.to_string()))?;
+            .map_err(|e| e.to_status())?;
 
         Ok(Response::new(UpdateNodeStatusResponse {}))
     }

@@ -14,6 +14,15 @@ pub enum StoreError {
     Decode(String),
 }
 
+impl StoreError {
+    pub fn to_status(&self) -> tonic::Status {
+        match self {
+            StoreError::Connection(msg) => tonic::Status::unavailable(msg),
+            StoreError::Decode(msg) => tonic::Status::internal(msg),
+        }
+    }
+}
+
 impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -101,22 +110,32 @@ impl Store {
         Ok(())
     }
 
-    /// Inserts a pod only if no existing pod shares its (namespace, name), atomically under
-    /// a single lock acquisition. Returns `false` (leaving the existing pod untouched) if one
-    /// already exists, so callers can implement create-once semantics without a separate
-    /// check-then-act race between `get_pod` and `upsert_pod`.
+    /// Inserts a pod only if no existing pod shares its (namespace, name).
+    /// Returns `false` (leaving the existing pod untouched) if one already exists.
     pub async fn create_pod(&self, pod: PodDetail) -> Result<bool, StoreError> {
-        let key = pod_key(&pod);
-        let mut pods = self.pods.write().await;
-        if pods.contains_key(&key) {
-            return Ok(false);
+        let (namespace, name) = pod_key(&pod);
+        if let Some(ref client) = self.client {
+            let etcd_key = pod_etcd_key(&namespace, &name);
+            let resp = client.clone().get(etcd_key.clone(), None).await?;
+            if !resp.kvs().is_empty() {
+                return Ok(false);
+            }
+            client
+                .clone()
+                .put(etcd_key, pod.encode_to_vec(), None)
+                .await?;
+        } else {
+            let key = (namespace, name);
+            let mut pods = self.pods.write().await;
+            if pods.contains_key(&key) {
+                return Ok(false);
+            }
+            pods.insert(key, pod.clone());
         }
-        let event = WatchPodEvent {
+        self.publish_pod_event(WatchPodEvent {
             event_type: EventType::Added as i32,
-            pod: Some(pod.clone()),
-        };
-        pods.insert(key, pod);
-        self.publish_pod_event(event);
+            pod: Some(pod),
+        });
         Ok(true)
     }
 
@@ -180,38 +199,106 @@ impl Store {
         Some(pod)
     }
 
-    /// Looks up the pod by (namespace, name) and applies `mutate` to it, then publishes
-    /// `event_type`, all under a single write-lock guard so a watcher can never
-    /// observe a stale read racing the update. Returns `true` if a pod was found and
-    /// updated, `false` if no pod exists for that key.
+    /// Looks up the pod by (namespace, name) and applies `mutate` to it, then
+    /// publishes `event_type`. Returns `true` if a pod was found and updated,
+    /// `false` if no pod exists for that key.
     pub async fn update_and_publish_pod<F>(
         &self,
         namespace: &str,
         name: &str,
         event_type: EventType,
         mutate: F,
-    ) -> bool
+    ) -> Result<bool, StoreError>
     where
         F: FnOnce(&mut PodDetail),
     {
-        let mut pods = self.pods.write().await;
-        let Some(pod) = pods.get_mut(&(namespace.to_string(), name.to_string())) else {
-            return Ok(false);
-        };
-        mutate(pod);
-        self.publish_pod_event(WatchPodEvent {
-            event_type: event_type as i32,
-            pod: Some(pod.clone()),
-        });
+        if let Some(ref client) = self.client {
+            let etcd_key = pod_etcd_key(namespace, name);
+            let resp = client.clone().get(etcd_key.clone(), None).await?;
+            let kv = match resp.kvs().first() {
+                Some(kv) => kv,
+                None => return Ok(false),
+            };
+            let mut pod =
+                PodDetail::decode(kv.value()).map_err(|e| StoreError::Decode(e.to_string()))?;
+            mutate(&mut pod);
+            client
+                .clone()
+                .put(etcd_key, pod.encode_to_vec(), None)
+                .await?;
+            self.publish_pod_event(WatchPodEvent {
+                event_type: event_type as i32,
+                pod: Some(pod),
+            });
+        } else {
+            let mut pods = self.pods.write().await;
+            let Some(pod) = pods.get_mut(&(namespace.to_string(), name.to_string())) else {
+                return Ok(false);
+            };
+            mutate(pod);
+            self.publish_pod_event(WatchPodEvent {
+                event_type: event_type as i32,
+                pod: Some(pod.clone()),
+            });
+        }
         Ok(true)
     }
 
-    pub async fn update_pod_status<F>(&self, namespace: &str, name: &str, mutate: F) -> bool
+    /// Looks up the pod by (namespace, name) and applies `mutate` to it, then
+    /// persists to etcd and publishes a MODIFIED event. Uses an etcd Txn to
+    /// ensure the key version hasn't changed between read and write. Returns
+    /// `true` if updated, `false` if the pod was not found or the CAS failed.
+    pub async fn update_pod_status<F>(
+        &self,
+        namespace: &str,
+        name: &str,
+        mutate: F,
+    ) -> Result<bool, StoreError>
     where
         F: FnOnce(&mut PodDetail),
     {
-        self.update_and_publish_pod(namespace, name, EventType::Modified, mutate)
-            .await
+        if let Some(ref client) = self.client {
+            let etcd_key = pod_etcd_key(namespace, name);
+            let resp = client.clone().get(etcd_key.clone(), None).await?;
+            let kv = match resp.kvs().first() {
+                Some(kv) => kv,
+                None => return Ok(false),
+            };
+            let version = kv.version();
+            let mut pod =
+                PodDetail::decode(kv.value()).map_err(|e| StoreError::Decode(e.to_string()))?;
+            mutate(&mut pod);
+            let txn = etcd_client::Txn::new()
+                .when(vec![etcd_client::Compare::version(
+                    etcd_key.clone(),
+                    etcd_client::CompareOp::Equal,
+                    version,
+                )])
+                .and_then(vec![etcd_client::TxnOp::put(
+                    etcd_key,
+                    pod.encode_to_vec(),
+                    None,
+                )]);
+            let txn_resp = client.clone().txn(txn).await?;
+            if !txn_resp.succeeded() {
+                return Ok(false);
+            }
+            self.publish_pod_event(WatchPodEvent {
+                event_type: EventType::Modified as i32,
+                pod: Some(pod),
+            });
+        } else {
+            let mut pods = self.pods.write().await;
+            let Some(pod) = pods.get_mut(&(namespace.to_string(), name.to_string())) else {
+                return Ok(false);
+            };
+            mutate(pod);
+            self.publish_pod_event(WatchPodEvent {
+                event_type: EventType::Modified as i32,
+                pod: Some(pod.clone()),
+            });
+        }
+        Ok(true)
     }
 
     /// Inserts or replaces a node and records this call as a liveness heartbeat,
@@ -533,7 +620,8 @@ mod tests {
             .update_and_publish_pod("default", "my-pod", EventType::Scheduled, |pod| {
                 pod.node_name = "node-1".to_string();
             })
-            .await;
+            .await
+            .unwrap();
 
         assert!(found);
         let event = events.try_recv().expect("an event should be published");

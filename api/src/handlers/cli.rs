@@ -72,7 +72,7 @@ impl ApiService {
             .store
             .create_pod(pod_detail.clone())
             .await
-            .map_err(|e| Status::unavailable(e.to_string()))?
+            .map_err(|e| e.to_status())?
         {
             return Err(crate::errors::pod_already_exists(&namespace, &name));
         }
@@ -118,7 +118,7 @@ impl ApiService {
             .store
             .get_pod(&req.namespace, &req.name)
             .await
-            .map_err(|e| Status::unavailable(e.to_string()))?
+            .map_err(|e| e.to_status())?
             .ok_or_else(|| crate::errors::pod_not_found(&req.namespace, &req.name))?;
         Ok(Response::new(GetPodResponse { pod: Some(pod) }))
     }
@@ -127,11 +127,7 @@ impl ApiService {
         &self,
         _request: Request<ListPodsRequest>,
     ) -> Result<Response<ListPodsResponse>, Status> {
-        let pods = self
-            .store
-            .list_pods()
-            .await
-            .map_err(|e| Status::unavailable(e.to_string()))?;
+        let pods = self.store.list_pods().await.map_err(|e| e.to_status())?;
         Ok(Response::new(ListPodsResponse { pods }))
     }
 
@@ -144,7 +140,7 @@ impl ApiService {
             .store
             .get_node(&req.name)
             .await
-            .map_err(|e| Status::unavailable(e.to_string()))?
+            .map_err(|e| e.to_status())?
             .ok_or_else(|| crate::errors::node_not_found(&req.name))?;
         Ok(Response::new(GetNodeResponse { node: Some(node) }))
     }
@@ -153,11 +149,7 @@ impl ApiService {
         &self,
         _request: Request<ListNodesRequest>,
     ) -> Result<Response<ListNodesResponse>, Status> {
-        let nodes = self
-            .store
-            .list_nodes()
-            .await
-            .map_err(|e| Status::unavailable(e.to_string()))?;
+        let nodes = self.store.list_nodes().await.map_err(|e| e.to_status())?;
         Ok(Response::new(ListNodesResponse { nodes }))
     }
 }

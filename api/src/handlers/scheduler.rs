@@ -56,7 +56,8 @@ impl ApiService {
                         detail.unschedulable_reason = None;
                         placed = detail.core.clone();
                     })
-                    .await;
+                    .await
+                    .map_err(|e| e.to_status())?;
                 if !found {
                     return Err(crate::errors::pod_not_found(&namespace, &name));
                 }
@@ -78,7 +79,8 @@ impl ApiService {
                     .update_and_publish_pod(&namespace, &name, EventType::Modified, |detail| {
                         detail.unschedulable_reason = Some(reason);
                     })
-                    .await;
+                    .await
+                    .map_err(|e| e.to_status())?;
                 if !found {
                     return Err(crate::errors::pod_not_found(&namespace, &name));
                 }
@@ -215,7 +217,12 @@ mod tests {
             .await
             .expect("assignment should succeed");
 
-        let stored = service.store.get_pod("default", "my-pod").await.unwrap();
+        let stored = service
+            .store
+            .get_pod("default", "my-pod")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(stored.node_name, "node-a");
 
         let pod_event = pod_events
@@ -248,7 +255,12 @@ mod tests {
             .await
             .expect("an unschedulable outcome should still be accepted");
 
-        let stored = service.store.get_pod("default", "my-pod").await.unwrap();
+        let stored = service
+            .store
+            .get_pod("default", "my-pod")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(
             stored.unschedulable_reason.as_deref(),
             Some("no node with enough memory")
@@ -273,7 +285,12 @@ mod tests {
             .await
             .unwrap();
 
-        let stored = service.store.get_pod("default", "my-pod").await.unwrap();
+        let stored = service
+            .store
+            .get_pod("default", "my-pod")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(stored.unschedulable_reason, None);
         assert_eq!(stored.node_name, "node-a");
     }
