@@ -192,7 +192,6 @@ impl Store {
         self.node_events.subscribe()
     }
 
-
     pub async fn publish_desired_state_event(
         &self,
         node_name: &str,
