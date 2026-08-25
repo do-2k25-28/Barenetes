@@ -80,7 +80,7 @@ FDB=$(timeout 5 bridge fdb show dev barenetes-vx dst 127.0.0.2) \
 grep -q 127.0.0.2 <<<"$FDB" \
     || fail "destination VXLAN 127.0.0.2 absente de la table FDB"
 echo "  - règle iptables d'isolation"
-timeout 5 iptables -w 0 -t filter -C BARENETES-FORWARD \
+timeout 5 iptables -w 1 -t filter -C BARENETES-FORWARD \
     -i barenetes0+ -o barenetes0+ -j DROP \
     || fail "règle d'isolation inter-VLAN absente d'iptables"
 
