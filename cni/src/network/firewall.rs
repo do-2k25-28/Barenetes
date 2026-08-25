@@ -216,7 +216,7 @@ fn ensure_rule_first(check: &[&str]) -> io::Result<()> {
     let mut add = check.to_vec();
     if let Some(position) = add.iter().position(|argument| *argument == "-C") {
         add[position] = "-I";
-        add.insert(position + 1, "1");
+        add.insert(position + 2, "1");
     }
     run(IPTABLES, &add)
 }
