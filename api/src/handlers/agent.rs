@@ -6,6 +6,7 @@ use proto::api::v1::{
 use tonic::{Request, Response, Status};
 
 use crate::service::{ApiService, DesiredStateEventStream};
+use crate::validation::validate_dns1123_subdomain;
 
 impl ApiService {
     pub async fn update_pod_status_impl(
@@ -99,6 +100,8 @@ impl ApiService {
     ) -> Result<Response<DesiredStateEventStream>, Status> {
         // The subscription is already scoped to this node, so no downstream filtering is needed.
         let node_name = request.into_inner().node_name;
+        validate_dns1123_subdomain(&node_name, "node name")?;
+
         let receiver = self.store.subscribe_desired_state_events(&node_name).await;
 
         Ok(Response::new(crate::service::broadcast_to_stream(receiver)))
@@ -382,6 +385,33 @@ mod tests {
             .expect("event should not be an error");
 
         assert_eq!(event.action, watch_desired_state_event::Action::Run as i32);
+    }
+
+    #[tokio::test]
+    async fn test_watch_desired_state_empty_node_name_rejected() {
+        let service = test_support::service();
+
+        let err = service
+            .watch_desired_state_impl(watch_desired_state_request(""))
+            .await
+            .map(|_| ())
+            .expect_err("a blank node name should be rejected");
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert_eq!(err.message(), "node name must not be empty");
+    }
+
+    #[tokio::test]
+    async fn test_watch_desired_state_malformed_node_name_rejected() {
+        let service = test_support::service();
+
+        let err = service
+            .watch_desired_state_impl(watch_desired_state_request("Node_A!"))
+            .await
+            .map(|_| ())
+            .expect_err("a malformed node name should be rejected");
+
+        assert_eq!(err.code(), Code::InvalidArgument);
     }
 
     #[tokio::test]
