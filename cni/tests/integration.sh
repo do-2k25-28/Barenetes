@@ -77,12 +77,14 @@ timeout 5 ip link show dev barenetes-vx >/dev/null \
 
 start_netns() {
     unshare -n sleep 600 &
-    echo "$!"
 }
 
-NS_A=$(start_netns)
-NS_B=$(start_netns)
-NS_C=$(start_netns)
+start_netns
+NS_A=$!
+start_netns
+NS_B=$!
+start_netns
+NS_C=$!
 
 grpc() {
     "$ROOT/target/debug/cni-integration-client" "$@"
