@@ -144,14 +144,25 @@ impl Store {
         let (namespace, name) = pod_key(&pod);
         if let Some(ref client) = self.client {
             let etcd_key = pod_etcd_key(&namespace, &name);
-            let resp = client.clone().get(etcd_key.clone(), None).await?;
-            if !resp.kvs().is_empty() {
-                return Ok(false);
+            let txn = etcd_client::Txn::new()
+                .when(vec![etcd_client::Compare::version(
+                    etcd_key.clone(),
+                    etcd_client::CompareOp::Equal,
+                    0,
+                )])
+                .and_then(vec![etcd_client::TxnOp::put(
+                    etcd_key,
+                    pod.encode_to_vec(),
+                    None,
+                )]);
+            let resp = client.clone().txn(txn).await?;
+            if resp.succeeded() {
+                self.publish_pod_event(WatchPodEvent {
+                    event_type: EventType::Added as i32,
+                    pod: Some(pod),
+                });
             }
-            client
-                .clone()
-                .put(etcd_key, pod.encode_to_vec(), None)
-                .await?;
+            return Ok(resp.succeeded());
         } else {
             let key = (namespace, name);
             let mut pods = self.pods.write().await;
