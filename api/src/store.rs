@@ -117,8 +117,15 @@ impl Store {
             .await?;
         let mut last_seen = self.node_last_seen.write().await;
         for kv in resp.kvs() {
-            if let Ok(node) = Node::decode(kv.value()) {
-                last_seen.insert(node.name, Instant::now());
+            match Node::decode(kv.value()) {
+                Ok(node) => {
+                    last_seen.insert(node.name, Instant::now());
+                }
+                Err(e) => {
+                    let key = String::from_utf8_lossy(kv.key());
+                    tracing::warn!(key = %key, error = %e, "skipping undecodable node at boot");
+                    last_seen.insert(key.into_owned(), Instant::now());
+                }
             }
         }
         Ok(())
@@ -217,7 +224,14 @@ impl Store {
             Ok(resp
                 .kvs()
                 .iter()
-                .filter_map(|kv| PodDetail::decode(kv.value()).ok())
+                .filter_map(|kv| {
+                    PodDetail::decode(kv.value())
+                        .map_err(|e| {
+                            let key = String::from_utf8_lossy(kv.key());
+                            tracing::warn!(key = %key, error = %e, "skipping undecodable pod");
+                        })
+                        .ok()
+                })
                 .collect())
         } else {
             Ok(self.pods.read().await.values().cloned().collect())
@@ -416,7 +430,14 @@ impl Store {
             Ok(resp
                 .kvs()
                 .iter()
-                .filter_map(|kv| Node::decode(kv.value()).ok())
+                .filter_map(|kv| {
+                    Node::decode(kv.value())
+                        .map_err(|e| {
+                            let key = String::from_utf8_lossy(kv.key());
+                            tracing::warn!(key = %key, error = %e, "skipping undecodable node");
+                        })
+                        .ok()
+                })
                 .collect())
         } else {
             Ok(self.nodes.read().await.values().cloned().collect())
