@@ -92,10 +92,16 @@ impl Store {
     }
 
     /// Looks up the pod by (namespace, name) and applies `mutate` to it, then publishes
-    /// a MODIFIED event, all under a single write-lock guard so a watcher can never
+    /// `event_type`, all under a single write-lock guard so a watcher can never
     /// observe a stale read racing the update. Returns `true` if a pod was found and
     /// updated, `false` if no pod exists for that key.
-    pub async fn update_pod_status<F>(&self, namespace: &str, name: &str, mutate: F) -> bool
+    pub async fn update_and_publish_pod<F>(
+        &self,
+        namespace: &str,
+        name: &str,
+        event_type: EventType,
+        mutate: F,
+    ) -> bool
     where
         F: FnOnce(&mut PodDetail),
     {
@@ -105,10 +111,18 @@ impl Store {
         };
         mutate(pod);
         self.publish_pod_event(WatchPodEvent {
-            event_type: EventType::Modified as i32,
+            event_type: event_type as i32,
             pod: Some(pod.clone()),
         });
         true
+    }
+
+    pub async fn update_pod_status<F>(&self, namespace: &str, name: &str, mutate: F) -> bool
+    where
+        F: FnOnce(&mut PodDetail),
+    {
+        self.update_and_publish_pod(namespace, name, EventType::Modified, mutate)
+            .await
     }
 
     /// Inserts or replaces a node and records this call as a liveness heartbeat,
@@ -197,32 +211,30 @@ impl Store {
         node_name: &str,
         event: WatchDesiredStateEvent,
     ) {
-        let sender = self.desired_state_sender(node_name).await;
-        let _ = sender.send(event);
+        if let Some(sender) = self.desired_state_channels.read().await.get(node_name) {
+            let _ = sender.send(event);
+        }
     }
 
+    /// Get-or-create the channel for `node_name` and subscribe to it, evicting channels
+    /// nobody is listening on any more along the way
     pub async fn subscribe_desired_state_events(
         &self,
         node_name: &str,
     ) -> broadcast::Receiver<WatchDesiredStateEvent> {
-        self.desired_state_sender(node_name).await.subscribe()
-    }
+        let mut channels = self.desired_state_channels.write().await;
 
-    /// Get-or-create: returns the existing sender for `node_name`, or creates a fresh channel for
-    /// it if this is the first publish/subscribe seen for that node.
-    async fn desired_state_sender(
-        &self,
-        node_name: &str,
-    ) -> broadcast::Sender<WatchDesiredStateEvent> {
-        if let Some(sender) = self.desired_state_channels.read().await.get(node_name) {
-            return sender.clone();
-        }
-        self.desired_state_channels
-            .write()
-            .await
+        channels.retain(|_, sender| sender.receiver_count() > 0);
+
+        channels
             .entry(node_name.to_string())
             .or_insert_with(|| broadcast::channel(EVENT_CHANNEL_CAPACITY).0)
-            .clone()
+            .subscribe()
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn desired_state_channel_count(&self) -> usize {
+        self.desired_state_channels.read().await.len()
     }
 }
 
@@ -278,6 +290,26 @@ mod tests {
         assert!(!store.create_pod(duplicate).await);
 
         assert_eq!(store.get_pod("default", "my-pod").await, Some(original));
+    }
+
+    #[tokio::test]
+    async fn test_update_and_publish_pod_uses_the_given_event_type() {
+        let store = Store::new();
+        store
+            .upsert_pod(test_support::pod_detail("default", "my-pod"))
+            .await;
+        let mut events = store.subscribe_pod_events();
+
+        let found = store
+            .update_and_publish_pod("default", "my-pod", EventType::Scheduled, |pod| {
+                pod.node_name = "node-1".to_string();
+            })
+            .await;
+
+        assert!(found);
+        let event = events.try_recv().expect("an event should be published");
+        assert_eq!(event.event_type, EventType::Scheduled as i32);
+        assert_eq!(event.pod.unwrap().node_name, "node-1");
     }
 
     #[tokio::test]
@@ -344,6 +376,66 @@ mod tests {
             action: action as i32,
             pod: None,
         }
+    }
+
+    #[tokio::test]
+    async fn test_publish_desired_state_to_unwatched_node_creates_no_channel() {
+        let store = Store::new();
+
+        store
+            .publish_desired_state_event(
+                "node-a",
+                get_desired_state_event(watch_desired_state_event::Action::Run),
+            )
+            .await;
+
+        assert_eq!(
+            store.desired_state_channel_count().await,
+            0,
+            "publishing to a node nobody watches must not leave a channel behind"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_desired_state_channel_dropped_once_last_watcher_goes_away() {
+        let store = Store::new();
+
+        let receiver = store.subscribe_desired_state_events("node-a").await;
+        assert_eq!(store.desired_state_channel_count().await, 1);
+
+        drop(receiver);
+
+        // The eviction happens on the next subscribe, so node-b's arrival should clear node-a.
+        let _node_b = store.subscribe_desired_state_events("node-b").await;
+        assert_eq!(
+            store.desired_state_channel_count().await,
+            1,
+            "node-a's channel should have been evicted once its only receiver was dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_desired_state_channel_kept_while_another_watcher_remains() {
+        let store = Store::new();
+
+        let first = store.subscribe_desired_state_events("node-a").await;
+        let mut second = store.subscribe_desired_state_events("node-a").await;
+        drop(first);
+
+        // A subscribe for a different node triggers the prune so node-a still has a receiver.
+        let _node_b = store.subscribe_desired_state_events("node-b").await;
+
+        store
+            .publish_desired_state_event(
+                "node-a",
+                get_desired_state_event(watch_desired_state_event::Action::Run),
+            )
+            .await;
+
+        assert!(
+            second.try_recv().is_ok(),
+            "the surviving node-a watcher must still receive events"
+        );
     }
 
     #[tokio::test]
