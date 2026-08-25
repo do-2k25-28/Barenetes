@@ -47,6 +47,8 @@ pub struct Containerd {
     channel: Channel,
 }
 
+type Pid = u32;
+
 impl Containerd {
     pub async fn connect(socket: &str) -> Result<Self, tonic::transport::Error> {
         let channel = containerd_client::connect(socket).await?;
@@ -59,7 +61,7 @@ impl Containerd {
         &self,
         pod: &str,
         container: &proto::shared::v1::Container,
-    ) -> Result<u32, Status> {
+    ) -> Result<Pid, Status> {
         let id = container_id(pod, &container.name);
 
         self.pull_image(&container.image).await?;
