@@ -14,5 +14,7 @@ same time locally.)
 
 ## RPCs
 
-Every RPC currently panics with `todo!()`. TODO: Replace the body of `*_impl` methods in each file. The routing in `src/service.rs` is already wired up and
-shouldn't need to change.
+`delete_pod`, `watch_pods`, `watch_nodes`, `assign_pod`, and `watch_desired_state`
+are still unimplemented (`Status::unimplemented`). Everything else is implemented.
+TODO: replace the body of the remaining `*_impl` methods in each file. The routing
+in `src/service.rs` is already wired up and shouldn't need to change.

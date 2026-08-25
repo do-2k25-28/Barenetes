@@ -97,10 +97,11 @@ impl ApiService {
         &self,
         _request: Request<WatchDesiredStateRequest>,
     ) -> Result<Response<DesiredStateEventStream>, Status> {
-        todo!(
-            "stream self.store.subscribe_desired_state_events(&request.get_ref().node_name) \
-             directly — the subscription is already scoped to that node, no downstream filtering needed"
-        )
+        // TODO: stream self.store.subscribe_desired_state_events(&request.get_ref().node_name)
+        // directly — the subscription is already scoped to that node, no downstream filtering needed
+        Err(Status::unimplemented(
+            "watch_desired_state is not yet implemented",
+        ))
     }
 }
 

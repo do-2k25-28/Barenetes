@@ -5,6 +5,7 @@ mod store;
 mod telemetry;
 #[cfg(test)]
 mod test_support;
+mod validation;
 
 use std::sync::Arc;
 
@@ -17,6 +18,13 @@ use store::Store;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = "127.0.0.1:50052".parse()?;
+
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
 
     let store = Arc::new(Store::new());
 
@@ -33,13 +41,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let api_service = ApiService { store };
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
-
     tracing::info!(%addr, "API server starting");
 
     Server::builder()
@@ -55,5 +56,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn shutdown_signal() {
     if let Err(error) = tokio::signal::ctrl_c().await {
         tracing::error!(%error, "failed to install shutdown signal handler");
+        std::future::pending::<()>().await;
     }
 }

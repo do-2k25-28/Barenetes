@@ -53,6 +53,25 @@ impl Store {
         self.pods.write().await.insert(key, pod);
     }
 
+    /// Inserts a pod only if no existing pod shares its (namespace, name), atomically under
+    /// a single lock acquisition. Returns `false` (leaving the existing pod untouched) if one
+    /// already exists, so callers can implement create-once semantics without a separate
+    /// check-then-act race between `get_pod` and `upsert_pod`.
+    pub async fn create_pod(&self, pod: PodDetail) -> bool {
+        let key = pod_key(&pod);
+        let mut pods = self.pods.write().await;
+        if pods.contains_key(&key) {
+            return false;
+        }
+        let event = WatchPodEvent {
+            event_type: EventType::Added as i32,
+            pod: Some(pod.clone()),
+        };
+        pods.insert(key, pod);
+        self.publish_pod_event(event);
+        true
+    }
+
     pub async fn get_pod(&self, namespace: &str, name: &str) -> Option<PodDetail> {
         self.pods
             .read()
@@ -127,7 +146,7 @@ impl Store {
             let last_seen = self.node_last_seen.read().await;
             last_seen
                 .iter()
-                .filter(|(_, seen)| now.saturating_duration_since(**seen) > timeout)
+                .filter(|(_, seen)| now.saturating_duration_since(**seen) >= timeout)
                 .map(|(name, _)| name.clone())
                 .collect()
         };
@@ -207,7 +226,7 @@ impl Store {
     }
 }
 
-fn pod_key(pod: &PodDetail) -> (String, String) {
+pub(crate) fn pod_key(pod: &PodDetail) -> (String, String) {
     let namespace = pod
         .core
         .as_ref()
@@ -246,6 +265,19 @@ mod tests {
         let store = Store::new();
 
         assert_eq!(store.get_pod("default", "does-not-exist").await, None);
+    }
+
+    #[tokio::test]
+    async fn test_create_pod_rejects_duplicate_and_leaves_existing_untouched() {
+        let store = Store::new();
+        let original = test_support::pod_detail("default", "my-pod");
+        assert!(store.create_pod(original.clone()).await);
+
+        let mut duplicate = test_support::pod_detail("default", "my-pod");
+        duplicate.message = Some("different".to_string());
+        assert!(!store.create_pod(duplicate).await);
+
+        assert_eq!(store.get_pod("default", "my-pod").await, Some(original));
     }
 
     #[tokio::test]
@@ -356,6 +388,19 @@ mod tests {
             .try_recv()
             .expect("a node MODIFIED event should have been published");
         assert_eq!(event.event_type, EventType::Modified as i32);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_sweep_stale_nodes_marks_node_stale_at_exact_timeout() {
+        let store = Store::new();
+        store
+            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
+            .await;
+
+        tokio::time::advance(NODE_STALE_TIMEOUT).await;
+        let stale = store.sweep_stale_nodes(NODE_STALE_TIMEOUT).await;
+
+        assert_eq!(stale, vec!["node-1".to_string()]);
     }
 
     #[tokio::test(start_paused = true)]
