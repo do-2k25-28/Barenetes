@@ -369,15 +369,7 @@ impl Store {
     /// Inserts or replaces a node and records this call as a liveness heartbeat,
     /// then publishes the resulting ADDED (first report) or MODIFIED event.
     pub async fn upsert_and_publish_node(&self, node: Node) -> Result<(), StoreError> {
-        // Short lock: just update the heartbeat timestamp.
-        {
-            let mut last_seen = self.node_last_seen.write().await;
-            last_seen.insert(node.name.clone(), Instant::now());
-        }
-
         let event_type = if let Some(ref client) = self.client {
-            // Serialize the get→put against the sweeper so a heartbeat can't
-            // race with a stale put overwriting fresh data.
             let _guard = self.node_op_lock.lock().await;
             let key = node_etcd_key(&node.name);
             let resp = client.clone().get(key.clone(), None).await?;
@@ -395,6 +387,11 @@ impl Store {
                 Some(_) => EventType::Modified,
             }
         };
+
+        self.node_last_seen
+            .write()
+            .await
+            .insert(node.name.clone(), Instant::now());
 
         self.publish_node_event(WatchNodeEvent {
             event_type: event_type as i32,
