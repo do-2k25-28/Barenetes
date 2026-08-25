@@ -618,6 +618,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_delete_pod_publishes_stop_to_the_assigned_node() {
+        let service = service();
+        // create_pod never assigns a node, so seed a scheduled pod directly.
+        let mut scheduled = test_support::pod_detail("default", "my-pod");
+        scheduled.node_name = "node-a".to_string();
+        service.store.upsert_pod(scheduled.clone()).await;
+
+        let mut desired_state_events = service.store.subscribe_desired_state_events("node-a").await;
+
+        service
+            .delete_pod_impl(delete_pod_request("default", "my-pod"))
+            .await
+            .expect("delete_pod should succeed");
+
+        let event = desired_state_events
+            .try_recv()
+            .expect("node-a should receive a STOP event");
+        assert_eq!(event.action, watch_desired_state_event::Action::Stop as i32);
+        assert_eq!(event.pod, scheduled.core);
+    }
+
+    #[tokio::test]
+    async fn test_delete_pod_stop_goes_only_to_the_assigned_node() {
+        let service = service();
+        let mut scheduled = test_support::pod_detail("default", "my-pod");
+        scheduled.node_name = "node-a".to_string();
+        service.store.upsert_pod(scheduled).await;
+
+        let mut other_node = service.store.subscribe_desired_state_events("node-b").await;
+
+        service
+            .delete_pod_impl(delete_pod_request("default", "my-pod"))
+            .await
+            .expect("delete_pod should succeed");
+
+        assert!(
+            other_node.try_recv().is_err(),
+            "node-b must not be told to stop a pod scheduled on node-a"
+        );
+    }
+
+    #[tokio::test]
     async fn test_delete_pod_without_node_name_skips_desired_state_event() {
         let service = service();
         service
