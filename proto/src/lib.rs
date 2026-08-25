@@ -11,7 +11,6 @@ pub mod api {
 }
 
 // Commented out because this proto file is currently an empty stub.
-
 // pub mod barectl {
 //     pub mod v1 {
 //         tonic::include_proto!("barectl.v1");

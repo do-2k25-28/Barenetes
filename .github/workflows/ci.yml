@@ -23,6 +23,13 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - uses: bufbuild/buf-setup-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check proto formatting
+        run: buf format --diff --exit-code proto
+
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
