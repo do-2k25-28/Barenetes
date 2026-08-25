@@ -192,37 +192,36 @@ impl Store {
         self.node_events.subscribe()
     }
 
+
     pub async fn publish_desired_state_event(
         &self,
         node_name: &str,
         event: WatchDesiredStateEvent,
     ) {
-        let sender = self.desired_state_sender(node_name).await;
-        let _ = sender.send(event);
+        if let Some(sender) = self.desired_state_channels.read().await.get(node_name) {
+            let _ = sender.send(event);
+        }
     }
 
+    /// Get-or-create the channel for `node_name` and subscribe to it, evicting channels
+    /// nobody is listening on any more along the way
     pub async fn subscribe_desired_state_events(
         &self,
         node_name: &str,
     ) -> broadcast::Receiver<WatchDesiredStateEvent> {
-        self.desired_state_sender(node_name).await.subscribe()
-    }
+        let mut channels = self.desired_state_channels.write().await;
 
-    /// Get-or-create: returns the existing sender for `node_name`, or creates a fresh channel for
-    /// it if this is the first publish/subscribe seen for that node.
-    async fn desired_state_sender(
-        &self,
-        node_name: &str,
-    ) -> broadcast::Sender<WatchDesiredStateEvent> {
-        if let Some(sender) = self.desired_state_channels.read().await.get(node_name) {
-            return sender.clone();
-        }
-        self.desired_state_channels
-            .write()
-            .await
+        channels.retain(|_, sender| sender.receiver_count() > 0);
+
+        channels
             .entry(node_name.to_string())
             .or_insert_with(|| broadcast::channel(EVENT_CHANNEL_CAPACITY).0)
-            .clone()
+            .subscribe()
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn desired_state_channel_count(&self) -> usize {
+        self.desired_state_channels.read().await.len()
     }
 }
 
@@ -344,6 +343,66 @@ mod tests {
             action: action as i32,
             pod: None,
         }
+    }
+
+    #[tokio::test]
+    async fn test_publish_desired_state_to_unwatched_node_creates_no_channel() {
+        let store = Store::new();
+
+        store
+            .publish_desired_state_event(
+                "node-a",
+                get_desired_state_event(watch_desired_state_event::Action::Run),
+            )
+            .await;
+
+        assert_eq!(
+            store.desired_state_channel_count().await,
+            0,
+            "publishing to a node nobody watches must not leave a channel behind"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_desired_state_channel_dropped_once_last_watcher_goes_away() {
+        let store = Store::new();
+
+        let receiver = store.subscribe_desired_state_events("node-a").await;
+        assert_eq!(store.desired_state_channel_count().await, 1);
+
+        drop(receiver);
+
+        // The eviction happens on the next subscribe, so node-b's arrival should clear node-a.
+        let _node_b = store.subscribe_desired_state_events("node-b").await;
+        assert_eq!(
+            store.desired_state_channel_count().await,
+            1,
+            "node-a's channel should have been evicted once its only receiver was dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_desired_state_channel_kept_while_another_watcher_remains() {
+        let store = Store::new();
+
+        let first = store.subscribe_desired_state_events("node-a").await;
+        let mut second = store.subscribe_desired_state_events("node-a").await;
+        drop(first);
+
+        // A subscribe for a different node triggers the prune so node-a still has a receiver.
+        let _node_b = store.subscribe_desired_state_events("node-b").await;
+
+        store
+            .publish_desired_state_event(
+                "node-a",
+                get_desired_state_event(watch_desired_state_event::Action::Run),
+            )
+            .await;
+
+        assert!(
+            second.try_recv().is_ok(),
+            "the surviving node-a watcher must still receive events"
+        );
     }
 
     #[tokio::test]
