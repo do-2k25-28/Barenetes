@@ -117,7 +117,10 @@ impl Store {
         if let Some(ref client) = self.client {
             let resp = client
                 .clone()
-                .get(pods_prefix(), Some(etcd_client::GetOptions::default().with_prefix()))
+                .get(
+                    pods_prefix(),
+                    Some(etcd_client::GetOptions::default().with_prefix()),
+                )
                 .await
                 .unwrap();
             resp.kvs()
@@ -193,10 +196,7 @@ impl Store {
                 .await
                 .map(|resp| resp.kvs().is_empty())
                 .unwrap_or(true);
-            let _ = client
-                .clone()
-                .put(key, node.encode_to_vec(), None)
-                .await;
+            let _ = client.clone().put(key, node.encode_to_vec(), None).await;
             if is_new {
                 EventType::Added
             } else {
@@ -218,11 +218,7 @@ impl Store {
 
     pub async fn get_node(&self, name: &str) -> Option<Node> {
         if let Some(ref client) = self.client {
-            let resp = client
-                .clone()
-                .get(node_etcd_key(name), None)
-                .await
-                .ok()?;
+            let resp = client.clone().get(node_etcd_key(name), None).await.ok()?;
             let kv = resp.kvs().first()?;
             Node::decode(kv.value()).ok()
         } else {
@@ -234,7 +230,10 @@ impl Store {
         if let Some(ref client) = self.client {
             let resp = client
                 .clone()
-                .get(nodes_prefix(), Some(etcd_client::GetOptions::default().with_prefix()))
+                .get(
+                    nodes_prefix(),
+                    Some(etcd_client::GetOptions::default().with_prefix()),
+                )
                 .await
                 .unwrap();
             resp.kvs()
@@ -270,10 +269,7 @@ impl Store {
                     && node.status != NodeStatus::NotReady as i32
                 {
                     node.status = NodeStatus::NotReady as i32;
-                    let _ = client
-                        .clone()
-                        .put(key, node.encode_to_vec(), None)
-                        .await;
+                    let _ = client.clone().put(key, node.encode_to_vec(), None).await;
                     newly_stale.push(node);
                 }
             }
