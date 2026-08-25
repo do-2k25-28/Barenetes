@@ -68,7 +68,8 @@ impl ApiService {
                     detail.resource_usage = resource_usage;
                 }
             })
-            .await;
+            .await
+            .map_err(|e| Status::unavailable(e.to_string()))?;
         if !found {
             return Err(crate::errors::pod_not_found(
                 &spec.namespace,
@@ -91,7 +92,10 @@ impl ApiService {
             return Err(Status::invalid_argument("missing node name"));
         }
 
-        self.store.upsert_and_publish_node(node).await;
+        self.store
+            .upsert_and_publish_node(node)
+            .await
+            .map_err(|e| Status::unavailable(e.to_string()))?;
 
         Ok(Response::new(UpdateNodeStatusResponse {}))
     }
@@ -180,7 +184,8 @@ mod tests {
         service
             .store
             .upsert_pod(test_support::pod_detail("default", "web"))
-            .await;
+            .await
+            .unwrap();
         let mut events = service.store.subscribe_pod_events();
 
         let response = service
@@ -190,7 +195,12 @@ mod tests {
 
         assert_eq!(response.get_ref(), &UpdatePodStatusResponse {});
 
-        let pod = service.store.get_pod("default", "web").await.unwrap();
+        let pod = service
+            .store
+            .get_pod("default", "web")
+            .await
+            .unwrap()
+            .unwrap();
         let core_pod = pod
             .core
             .as_ref()
@@ -229,14 +239,19 @@ mod tests {
                 memory: 64,
             });
         }
-        service.store.upsert_pod(seed).await;
+        service.store.upsert_pod(seed).await.unwrap();
 
         service
             .update_pod_status_impl(update_request("default", "web"))
             .await
             .unwrap();
 
-        let pod = service.store.get_pod("default", "web").await.unwrap();
+        let pod = service
+            .store
+            .get_pod("default", "web")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(pod.node_name, "node-a");
         assert_eq!(pod.unschedulable_reason.as_deref(), Some("no node fits"));
         let core_pod = pod
@@ -343,7 +358,12 @@ mod tests {
         assert_eq!(event.event_type, EventType::Modified as i32);
         assert_eq!(event.node, Some(node("node-1", NodeStatus::NotReady)));
         assert_eq!(
-            service.store.get_node("node-1").await.map(|n| n.status),
+            service
+                .store
+                .get_node("node-1")
+                .await
+                .unwrap()
+                .map(|n| n.status),
             Some(NodeStatus::NotReady as i32)
         );
     }

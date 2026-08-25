@@ -1,11 +1,35 @@
 use prost::Message;
 use std::collections::HashMap;
+use std::fmt;
 use std::time::Duration;
 
 use proto::api::v1::{WatchDesiredStateEvent, WatchNodeEvent, WatchPodEvent};
 use proto::shared::v1::{EventType, Node, NodeStatus, PodDetail, PodWithSpec};
 use tokio::sync::{RwLock, broadcast};
 use tokio::time::Instant;
+
+#[derive(Debug)]
+pub enum StoreError {
+    Connection(String),
+    Decode(String),
+}
+
+impl fmt::Display for StoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StoreError::Connection(msg) => write!(f, "etcd connection error: {msg}"),
+            StoreError::Decode(msg) => write!(f, "etcd decode error: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for StoreError {}
+
+impl From<etcd_client::Error> for StoreError {
+    fn from(e: etcd_client::Error) -> Self {
+        StoreError::Connection(e.to_string())
+    }
+}
 
 const EVENT_CHANNEL_CAPACITY: usize = 128;
 
@@ -64,27 +88,28 @@ impl Store {
     }
 
     /// Inserts a pod, replacing any existing entry with the same (namespace, name).
-    pub async fn upsert_pod(&self, pod: PodDetail) {
+    pub async fn upsert_pod(&self, pod: PodDetail) -> Result<(), StoreError> {
         if let Some(ref client) = self.client {
             let (namespace, name) = pod_key(&pod);
             let etcd_key = pod_etcd_key(&namespace, &name);
             let value = pod.encode_to_vec();
-            let _ = client.clone().put(etcd_key, value, None).await;
+            client.clone().put(etcd_key, value, None).await?;
         } else {
             let key = pod_key(&pod);
             self.pods.write().await.insert(key, pod);
         }
+        Ok(())
     }
 
     /// Inserts a pod only if no existing pod shares its (namespace, name), atomically under
     /// a single lock acquisition. Returns `false` (leaving the existing pod untouched) if one
     /// already exists, so callers can implement create-once semantics without a separate
     /// check-then-act race between `get_pod` and `upsert_pod`.
-    pub async fn create_pod(&self, pod: PodDetail) -> bool {
+    pub async fn create_pod(&self, pod: PodDetail) -> Result<bool, StoreError> {
         let key = pod_key(&pod);
         let mut pods = self.pods.write().await;
         if pods.contains_key(&key) {
-            return false;
+            return Ok(false);
         }
         let event = WatchPodEvent {
             event_type: EventType::Added as i32,
@@ -92,28 +117,37 @@ impl Store {
         };
         pods.insert(key, pod);
         self.publish_pod_event(event);
-        true
+        Ok(true)
     }
 
-    pub async fn get_pod(&self, namespace: &str, name: &str) -> Option<PodDetail> {
+    pub async fn get_pod(
+        &self,
+        namespace: &str,
+        name: &str,
+    ) -> Result<Option<PodDetail>, StoreError> {
         if let Some(ref client) = self.client {
             let resp = client
                 .clone()
                 .get(pod_etcd_key(namespace, name), None)
-                .await
-                .ok()?;
-            let kv = resp.kvs().first()?;
-            PodDetail::decode(kv.value()).ok()
+                .await?;
+            let kv = match resp.kvs().first() {
+                Some(kv) => kv,
+                None => return Ok(None),
+            };
+            Ok(PodDetail::decode(kv.value())
+                .map(Some)
+                .map_err(|e| StoreError::Decode(e.to_string()))?)
         } else {
-            self.pods
+            Ok(self
+                .pods
                 .read()
                 .await
                 .get(&(namespace.to_string(), name.to_string()))
-                .cloned()
+                .cloned())
         }
     }
 
-    pub async fn list_pods(&self) -> Vec<PodDetail> {
+    pub async fn list_pods(&self) -> Result<Vec<PodDetail>, StoreError> {
         if let Some(ref client) = self.client {
             let resp = client
                 .clone()
@@ -121,14 +155,14 @@ impl Store {
                     pods_prefix(),
                     Some(etcd_client::GetOptions::default().with_prefix()),
                 )
-                .await
-                .unwrap();
-            resp.kvs()
+                .await?;
+            Ok(resp
+                .kvs()
                 .iter()
                 .filter_map(|kv| PodDetail::decode(kv.value()).ok())
-                .collect()
+                .collect())
         } else {
-            self.pods.read().await.values().cloned().collect()
+            Ok(self.pods.read().await.values().cloned().collect())
         }
     }
 
@@ -162,14 +196,14 @@ impl Store {
     {
         let mut pods = self.pods.write().await;
         let Some(pod) = pods.get_mut(&(namespace.to_string(), name.to_string())) else {
-            return false;
+            return Ok(false);
         };
         mutate(pod);
         self.publish_pod_event(WatchPodEvent {
             event_type: event_type as i32,
             pod: Some(pod.clone()),
         });
-        true
+        Ok(true)
     }
 
     pub async fn update_pod_status<F>(&self, namespace: &str, name: &str, mutate: F) -> bool
@@ -184,19 +218,15 @@ impl Store {
     /// then publishes the resulting ADDED (first report) or MODIFIED event while
     /// still holding the write guard, so a watcher can never observe MODIFIED
     /// before the ADDED of the node it refers to
-    pub async fn upsert_and_publish_node(&self, node: Node) {
+    pub async fn upsert_and_publish_node(&self, node: Node) -> Result<(), StoreError> {
         let mut last_seen = self.node_last_seen.write().await;
         last_seen.insert(node.name.clone(), Instant::now());
 
         let event_type = if let Some(ref client) = self.client {
             let key = node_etcd_key(&node.name);
-            let is_new = client
-                .clone()
-                .get(key.clone(), None)
-                .await
-                .map(|resp| resp.kvs().is_empty())
-                .unwrap_or(true);
-            let _ = client.clone().put(key, node.encode_to_vec(), None).await;
+            let resp = client.clone().get(key.clone(), None).await?;
+            let is_new = resp.kvs().is_empty();
+            client.clone().put(key, node.encode_to_vec(), None).await?;
             if is_new {
                 EventType::Added
             } else {
@@ -214,19 +244,25 @@ impl Store {
             event_type: event_type as i32,
             node: Some(node),
         });
+        Ok(())
     }
 
-    pub async fn get_node(&self, name: &str) -> Option<Node> {
+    pub async fn get_node(&self, name: &str) -> Result<Option<Node>, StoreError> {
         if let Some(ref client) = self.client {
-            let resp = client.clone().get(node_etcd_key(name), None).await.ok()?;
-            let kv = resp.kvs().first()?;
-            Node::decode(kv.value()).ok()
+            let resp = client.clone().get(node_etcd_key(name), None).await?;
+            let kv = match resp.kvs().first() {
+                Some(kv) => kv,
+                None => return Ok(None),
+            };
+            Ok(Node::decode(kv.value())
+                .map(Some)
+                .map_err(|e| StoreError::Decode(e.to_string()))?)
         } else {
-            self.nodes.read().await.get(name).cloned()
+            Ok(self.nodes.read().await.get(name).cloned())
         }
     }
 
-    pub async fn list_nodes(&self) -> Vec<Node> {
+    pub async fn list_nodes(&self) -> Result<Vec<Node>, StoreError> {
         if let Some(ref client) = self.client {
             let resp = client
                 .clone()
@@ -234,14 +270,14 @@ impl Store {
                     nodes_prefix(),
                     Some(etcd_client::GetOptions::default().with_prefix()),
                 )
-                .await
-                .unwrap();
-            resp.kvs()
+                .await?;
+            Ok(resp
+                .kvs()
                 .iter()
                 .filter_map(|kv| Node::decode(kv.value()).ok())
-                .collect()
+                .collect())
         } else {
-            self.nodes.read().await.values().cloned().collect()
+            Ok(self.nodes.read().await.values().cloned().collect())
         }
     }
 
@@ -263,15 +299,28 @@ impl Store {
         if let Some(ref client) = self.client {
             for name in &stale_names {
                 let key = node_etcd_key(name);
-                if let Ok(resp) = client.clone().get(key.clone(), None).await
-                    && let Some(kv) = resp.kvs().first()
-                    && let Ok(mut node) = Node::decode(kv.value())
-                    && node.status != NodeStatus::NotReady as i32
-                {
-                    node.status = NodeStatus::NotReady as i32;
-                    let _ = client.clone().put(key, node.encode_to_vec(), None).await;
-                    newly_stale.push(node);
+                let resp = match client.clone().get(key.clone(), None).await {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        tracing::warn!(%name, %e, "sweep: failed to read node from etcd");
+                        continue;
+                    }
+                };
+                let Some(kv) = resp.kvs().first() else {
+                    continue;
+                };
+                let Ok(mut node) = Node::decode(kv.value()) else {
+                    continue;
+                };
+                if node.status == NodeStatus::NotReady as i32 {
+                    continue;
                 }
+                node.status = NodeStatus::NotReady as i32;
+                if let Err(e) = client.clone().put(key, node.encode_to_vec(), None).await {
+                    tracing::warn!(%name, %e, "sweep: failed to write node to etcd");
+                    continue;
+                }
+                newly_stale.push(node);
             }
         } else {
             let mut nodes = self.nodes.write().await;
@@ -411,9 +460,9 @@ mod tests {
         let store = Store::new();
         let pod = test_support::pod_detail("default", "my-pod");
 
-        store.upsert_pod(pod.clone()).await;
+        store.upsert_pod(pod.clone()).await.unwrap();
 
-        assert_eq!(store.get_pod("default", "my-pod").await, Some(pod));
+        assert_eq!(store.get_pod("default", "my-pod").await.unwrap(), Some(pod));
     }
 
     #[tokio::test]
@@ -450,20 +499,26 @@ mod tests {
     async fn test_get_pod_missing_returns_none() {
         let store = Store::new();
 
-        assert_eq!(store.get_pod("default", "does-not-exist").await, None);
+        assert_eq!(
+            store.get_pod("default", "does-not-exist").await.unwrap(),
+            None
+        );
     }
 
     #[tokio::test]
     async fn test_create_pod_rejects_duplicate_and_leaves_existing_untouched() {
         let store = Store::new();
         let original = test_support::pod_detail("default", "my-pod");
-        assert!(store.create_pod(original.clone()).await);
+        assert!(store.create_pod(original.clone()).await.unwrap());
 
         let mut duplicate = test_support::pod_detail("default", "my-pod");
         duplicate.message = Some("different".to_string());
-        assert!(!store.create_pod(duplicate).await);
+        assert!(!store.create_pod(duplicate).await.unwrap());
 
-        assert_eq!(store.get_pod("default", "my-pod").await, Some(original));
+        assert_eq!(
+            store.get_pod("default", "my-pod").await.unwrap(),
+            Some(original)
+        );
     }
 
     #[tokio::test]
@@ -491,18 +546,25 @@ mod tests {
         let store = Store::new();
         store
             .upsert_pod(test_support::pod_detail("default", "web"))
-            .await;
+            .await
+            .unwrap();
         let mut events = store.subscribe_pod_events();
 
         let found = store
             .update_pod_status("default", "web", |pod| {
                 pod.pod_ip = Some("10.0.0.5".to_string());
             })
-            .await;
+            .await
+            .unwrap();
 
         assert!(found, "an existing pod should be updated");
         assert_eq!(
-            store.get_pod("default", "web").await.unwrap().pod_ip,
+            store
+                .get_pod("default", "web")
+                .await
+                .unwrap()
+                .unwrap()
+                .pod_ip,
             Some("10.0.0.5".to_string())
         );
 
@@ -513,7 +575,10 @@ mod tests {
         assert_eq!(event.pod.unwrap().pod_ip, Some("10.0.0.5".to_string()));
 
         assert!(
-            !store.update_pod_status("default", "ghost", |_| {}).await,
+            !store
+                .update_pod_status("default", "ghost", |_| {})
+                .await
+                .unwrap(),
             "updating a missing pod should return false"
         );
     }
@@ -525,10 +590,12 @@ mod tests {
 
         store
             .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
-            .await;
+            .await
+            .unwrap();
         store
             .upsert_and_publish_node(test_support::node("node-1", NodeStatus::NotReady))
-            .await;
+            .await
+            .unwrap();
 
         assert_eq!(
             events.try_recv().unwrap().event_type,
@@ -538,7 +605,7 @@ mod tests {
             events.try_recv().unwrap().event_type,
             EventType::Modified as i32
         );
-        let nodes = store.list_nodes().await;
+        let nodes = store.list_nodes().await.unwrap();
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0].status, NodeStatus::NotReady as i32);
     }
@@ -641,14 +708,15 @@ mod tests {
         let store = Store::new();
         store
             .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
-            .await;
+            .await
+            .unwrap();
         let mut events = store.subscribe_node_events();
 
         tokio::time::advance(NODE_STALE_TIMEOUT + Duration::from_secs(1)).await;
         let stale = store.sweep_stale_nodes(NODE_STALE_TIMEOUT).await;
 
         assert_eq!(stale, vec!["node-1".to_string()]);
-        let node = store.get_node("node-1").await.unwrap();
+        let node = store.get_node("node-1").await.unwrap().unwrap();
         assert_eq!(node.status, NodeStatus::NotReady as i32);
         let event = events
             .try_recv()
@@ -661,7 +729,8 @@ mod tests {
         let store = Store::new();
         store
             .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
-            .await;
+            .await
+            .unwrap();
 
         tokio::time::advance(NODE_STALE_TIMEOUT).await;
         let stale = store.sweep_stale_nodes(NODE_STALE_TIMEOUT).await;
@@ -674,13 +743,14 @@ mod tests {
         let store = Store::new();
         store
             .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
-            .await;
+            .await
+            .unwrap();
 
         tokio::time::advance(Duration::from_secs(1)).await;
         let stale = store.sweep_stale_nodes(NODE_STALE_TIMEOUT).await;
 
         assert!(stale.is_empty());
-        let node = store.get_node("node-1").await.unwrap();
+        let node = store.get_node("node-1").await.unwrap().unwrap();
         assert_eq!(node.status, NodeStatus::Ready as i32);
     }
 
@@ -689,12 +759,14 @@ mod tests {
         let store = Store::new();
         store
             .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
-            .await;
+            .await
+            .unwrap();
 
         tokio::time::advance(NODE_STALE_TIMEOUT - Duration::from_secs(1)).await;
         store
             .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
-            .await; // heartbeat
+            .await
+            .unwrap(); // heartbeat
 
         tokio::time::advance(NODE_STALE_TIMEOUT - Duration::from_secs(1)).await;
         let stale = store.sweep_stale_nodes(NODE_STALE_TIMEOUT).await;
@@ -707,7 +779,8 @@ mod tests {
         let store = Store::new();
         store
             .upsert_and_publish_node(test_support::node("node-1", NodeStatus::NotReady))
-            .await;
+            .await
+            .unwrap();
 
         tokio::time::advance(NODE_STALE_TIMEOUT + Duration::from_secs(1)).await;
         let stale = store.sweep_stale_nodes(NODE_STALE_TIMEOUT).await;

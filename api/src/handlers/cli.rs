@@ -68,7 +68,12 @@ impl ApiService {
             ..Default::default()
         };
 
-        if !self.store.create_pod(pod_detail.clone()).await {
+        if !self
+            .store
+            .create_pod(pod_detail.clone())
+            .await
+            .map_err(|e| Status::unavailable(e.to_string()))?
+        {
             return Err(crate::errors::pod_already_exists(&namespace, &name));
         }
 
@@ -113,6 +118,7 @@ impl ApiService {
             .store
             .get_pod(&req.namespace, &req.name)
             .await
+            .map_err(|e| Status::unavailable(e.to_string()))?
             .ok_or_else(|| crate::errors::pod_not_found(&req.namespace, &req.name))?;
         Ok(Response::new(GetPodResponse { pod: Some(pod) }))
     }
@@ -121,7 +127,11 @@ impl ApiService {
         &self,
         _request: Request<ListPodsRequest>,
     ) -> Result<Response<ListPodsResponse>, Status> {
-        let pods = self.store.list_pods().await;
+        let pods = self
+            .store
+            .list_pods()
+            .await
+            .map_err(|e| Status::unavailable(e.to_string()))?;
         Ok(Response::new(ListPodsResponse { pods }))
     }
 
@@ -134,6 +144,7 @@ impl ApiService {
             .store
             .get_node(&req.name)
             .await
+            .map_err(|e| Status::unavailable(e.to_string()))?
             .ok_or_else(|| crate::errors::node_not_found(&req.name))?;
         Ok(Response::new(GetNodeResponse { node: Some(node) }))
     }
@@ -142,7 +153,11 @@ impl ApiService {
         &self,
         _request: Request<ListNodesRequest>,
     ) -> Result<Response<ListNodesResponse>, Status> {
-        let nodes = self.store.list_nodes().await;
+        let nodes = self
+            .store
+            .list_nodes()
+            .await
+            .map_err(|e| Status::unavailable(e.to_string()))?;
         Ok(Response::new(ListNodesResponse { nodes }))
     }
 }
@@ -168,7 +183,7 @@ mod tests {
     async fn test_get_pod_returns_inserted_pod() {
         let service = service();
         let pod = test_support::pod_detail("default", "my-pod");
-        service.store.upsert_pod(pod.clone()).await;
+        service.store.upsert_pod(pod.clone()).await.unwrap();
 
         let response = service
             .get_pod_impl(get_pod_request("default", "my-pod"))
@@ -200,7 +215,11 @@ mod tests {
     async fn test_get_node_returns_inserted_node() {
         let service = service();
         let node = test_support::node("node-1", NodeStatus::Ready);
-        service.store.upsert_and_publish_node(node.clone()).await;
+        service
+            .store
+            .upsert_and_publish_node(node.clone())
+            .await
+            .unwrap();
 
         let response = service
             .get_node_impl(get_node_request("node-1"))
@@ -242,7 +261,7 @@ mod tests {
     async fn test_list_pods_returns_single_pod() {
         let service = service();
         let pod = test_support::pod_detail("default", "my-pod");
-        service.store.upsert_pod(pod.clone()).await;
+        service.store.upsert_pod(pod.clone()).await.unwrap();
 
         let response = service
             .list_pods_impl(Request::new(ListPodsRequest {}))
@@ -261,7 +280,7 @@ mod tests {
             test_support::pod_detail("kube-system", "pod-c"),
         ];
         for pod in &expected {
-            service.store.upsert_pod(pod.clone()).await;
+            service.store.upsert_pod(pod.clone()).await.unwrap();
         }
 
         let response = service
@@ -292,7 +311,11 @@ mod tests {
     async fn test_list_nodes_returns_single_node() {
         let service = service();
         let node = test_support::node("node-1", NodeStatus::Ready);
-        service.store.upsert_and_publish_node(node.clone()).await;
+        service
+            .store
+            .upsert_and_publish_node(node.clone())
+            .await
+            .unwrap();
 
         let response = service
             .list_nodes_impl(Request::new(ListNodesRequest {}))
@@ -311,7 +334,11 @@ mod tests {
             test_support::node("node-c", NodeStatus::NotReady),
         ];
         for node in &expected {
-            service.store.upsert_and_publish_node(node.clone()).await;
+            service
+                .store
+                .upsert_and_publish_node(node.clone())
+                .await
+                .unwrap();
         }
 
         let response = service
@@ -378,6 +405,7 @@ mod tests {
             .store
             .get_pod("default", "my-pod")
             .await
+            .expect("etcd should be reachable")
             .expect("pod should be in the store");
         assert_eq!(stored.node_name, "");
     }
@@ -397,7 +425,7 @@ mod tests {
             .expect_err("second create_pod should fail");
 
         assert_eq!(err.code(), Code::AlreadyExists);
-        assert_eq!(service.store.list_pods().await.len(), 1);
+        assert_eq!(service.store.list_pods().await.unwrap().len(), 1);
     }
 
     #[tokio::test]
