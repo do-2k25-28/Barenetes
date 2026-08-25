@@ -68,14 +68,18 @@ done
 [[ -S "$SOCKET" ]] || { cat "$TMP_DIR/cni.log" >&2; fail "socket CNI non créée"; }
 
 echo "[2/7] vérification bridge, VXLAN et firewall"
+echo "  - bridge barenetes0"
 timeout 5 ip link show dev barenetes0 >/dev/null \
     || fail "bridge barenetes0 absent"
+echo "  - interface VXLAN barenetes-vx"
 timeout 5 ip link show dev barenetes-vx >/dev/null \
     || fail "interface VXLAN barenetes-vx absente"
+echo "  - destination FDB VXLAN"
 FDB=$(timeout 5 bridge fdb show dev barenetes-vx dst 127.0.0.2) \
     || fail "lecture de la table FDB VXLAN impossible"
 grep -q 127.0.0.2 <<<"$FDB" \
     || fail "destination VXLAN 127.0.0.2 absente de la table FDB"
+echo "  - règle iptables d'isolation"
 timeout 5 iptables -t filter -C BARENETES-FORWARD \
     -i barenetes0+ -o barenetes0+ -j DROP \
     || fail "règle d'isolation inter-VLAN absente d'iptables"
