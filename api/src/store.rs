@@ -96,6 +96,30 @@ impl Store {
         }
     }
 
+    /// Populate `node_last_seen` from persisted etcd nodes so the sweeper
+    /// can see them. Each node is marked as "just seen" so it must send a
+    /// heartbeat within the normal timeout to stay Ready.
+    pub async fn load_node_liveness(&self) -> Result<(), StoreError> {
+        let client = match self.client {
+            Some(ref c) => c.clone(),
+            None => return Ok(()),
+        };
+        let resp = client
+            .clone()
+            .get(
+                nodes_prefix(),
+                Some(etcd_client::GetOptions::default().with_prefix()),
+            )
+            .await?;
+        let mut last_seen = self.node_last_seen.write().await;
+        for kv in resp.kvs() {
+            if let Ok(node) = Node::decode(kv.value()) {
+                last_seen.insert(node.name, Instant::now());
+            }
+        }
+        Ok(())
+    }
+
     /// Inserts a pod, replacing any existing entry with the same (namespace, name).
     pub async fn upsert_pod(&self, pod: PodDetail) -> Result<(), StoreError> {
         if let Some(ref client) = self.client {

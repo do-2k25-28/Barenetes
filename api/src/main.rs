@@ -35,7 +35,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .collect();
         let client = etcd_client::Client::connect(&endpoints, None).await?;
         tracing::info!(?endpoints, "connected to etcd");
-        Arc::new(Store::new_with_etcd(client))
+        let store = Arc::new(Store::new_with_etcd(client));
+        store.load_node_liveness().await?;
+        store
     } else {
         tracing::info!("running with in-memory store");
         Arc::new(Store::new())
