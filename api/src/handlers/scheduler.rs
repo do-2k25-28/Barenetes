@@ -11,7 +11,10 @@ impl ApiService {
     ) -> Result<Response<PodEventStream>, Status> {
         let receiver = self.store.subscribe_pod_events();
 
-        Ok(Response::new(crate::service::broadcast_to_stream(receiver)))
+        Ok(Response::new(crate::service::broadcast_to_stream(
+            receiver,
+            "watch_pods",
+        )))
     }
 
     pub async fn watch_nodes_impl(

@@ -32,12 +32,18 @@ pub type DesiredStateEventStream =
 /// resync, rather than keep consuming a stream with a hole in it.
 pub(crate) fn broadcast_to_stream<T>(
     receiver: broadcast::Receiver<T>,
+    method: &'static str,
 ) -> Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>
 where
     T: Clone + Send + 'static,
 {
-    Box::pin(BroadcastStream::new(receiver).map(|item| {
+    Box::pin(BroadcastStream::new(receiver).map(move |item| {
         item.map_err(|BroadcastStreamRecvError::Lagged(n)| {
+            tracing::warn!(
+                method,
+                missed = n,
+                "watch fell behind; terminating stream with DATA_LOSS"
+            );
             Status::data_loss(format!(
                 "watch fell behind and missed {n} event(s); reconnect and re-list to resync"
             ))

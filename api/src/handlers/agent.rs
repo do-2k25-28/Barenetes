@@ -104,7 +104,10 @@ impl ApiService {
 
         let receiver = self.store.subscribe_desired_state_events(&node_name).await;
 
-        Ok(Response::new(crate::service::broadcast_to_stream(receiver)))
+        Ok(Response::new(crate::service::broadcast_to_stream(
+            receiver,
+            "watch_desired_state",
+        )))
     }
 }
 
