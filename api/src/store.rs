@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use proto::api::v1::{WatchDesiredStateEvent, WatchNodeEvent, WatchPodEvent};
 use proto::shared::v1::{EventType, Node, NodeStatus, PodDetail, PodWithSpec};
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{Mutex, RwLock, broadcast};
 use tokio::time::Instant;
 
 #[derive(Debug)]
@@ -65,6 +65,8 @@ pub struct Store {
     node_last_seen: RwLock<HashMap<String, Instant>>,
     pod_events: broadcast::Sender<WatchPodEvent>,
     node_events: broadcast::Sender<WatchNodeEvent>,
+    /// Serializes the read-modify-write on a node between heartbeat and sweeper.
+    node_op_lock: Mutex<()>,
     // One channel per node, created lazily on first publish/subscribe
     desired_state_channels: RwLock<HashMap<String, broadcast::Sender<WatchDesiredStateEvent>>>,
 }
@@ -80,6 +82,7 @@ impl Store {
             node_last_seen: RwLock::new(HashMap::new()),
             pod_events: broadcast::channel(EVENT_CHANNEL_CAPACITY).0,
             node_events: broadcast::channel(EVENT_CHANNEL_CAPACITY).0,
+            node_op_lock: Mutex::new(()),
             desired_state_channels: RwLock::new(HashMap::new()),
         }
     }
@@ -92,6 +95,7 @@ impl Store {
             node_last_seen: RwLock::new(HashMap::new()),
             pod_events: broadcast::channel(EVENT_CHANNEL_CAPACITY).0,
             node_events: broadcast::channel(EVENT_CHANNEL_CAPACITY).0,
+            node_op_lock: Mutex::new(()),
             desired_state_channels: RwLock::new(HashMap::new()),
         }
     }
@@ -326,14 +330,18 @@ impl Store {
     }
 
     /// Inserts or replaces a node and records this call as a liveness heartbeat,
-    /// then publishes the resulting ADDED (first report) or MODIFIED event while
-    /// still holding the write guard, so a watcher can never observe MODIFIED
-    /// before the ADDED of the node it refers to
+    /// then publishes the resulting ADDED (first report) or MODIFIED event.
     pub async fn upsert_and_publish_node(&self, node: Node) -> Result<(), StoreError> {
-        let mut last_seen = self.node_last_seen.write().await;
-        last_seen.insert(node.name.clone(), Instant::now());
+        // Short lock: just update the heartbeat timestamp.
+        {
+            let mut last_seen = self.node_last_seen.write().await;
+            last_seen.insert(node.name.clone(), Instant::now());
+        }
 
         let event_type = if let Some(ref client) = self.client {
+            // Serialize the get→put against the sweeper so a heartbeat can't
+            // race with a stale put overwriting fresh data.
+            let _guard = self.node_op_lock.lock().await;
             let key = node_etcd_key(&node.name);
             let resp = client.clone().get(key.clone(), None).await?;
             let is_new = resp.kvs().is_empty();
@@ -408,6 +416,7 @@ impl Store {
         let mut newly_stale = Vec::new();
 
         if let Some(ref client) = self.client {
+            let _guard = self.node_op_lock.lock().await;
             for name in &stale_names {
                 let key = node_etcd_key(name);
                 let resp = match client.clone().get(key.clone(), None).await {
