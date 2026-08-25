@@ -27,7 +27,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let store = if let Ok(endpoints) = std::env::var("BARENETES_ETCD_ENDPOINTS") {
-        let endpoints: Vec<String> = endpoints.split(',').map(String::from).collect();
+        let endpoints: Vec<String> = endpoints
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .collect();
         let client = etcd_client::Client::connect(&endpoints, None).await?;
         tracing::info!(?endpoints, "connected to etcd");
         Arc::new(Store::new_with_etcd(client))
