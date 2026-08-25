@@ -47,6 +47,8 @@ pub(crate) fn ensure_overlay() -> io::Result<()> {
     system::run(IP, &["link", "set", "dev", VXLAN, "up"])?;
     system::run(BRIDGE, &["vlan", "add", "dev", VXLAN, "vid", "1-4094"])?;
     system::run(BRIDGE, &["vlan", "del", "dev", VXLAN, "vid", "1"])?;
+    // Learning is disabled; remove stale static destinations after a restart.
+    system::run(BRIDGE, &["fdb", "flush", "dev", VXLAN])?;
     for remote in remote_nodes {
         system::run(
             BRIDGE,

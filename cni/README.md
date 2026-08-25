@@ -46,3 +46,22 @@ TCP/UDP firewall forwarding in `AddWorkloadNetwork`:
 
 The agent then uses `GetWorkloadNetwork` and `DeleteWorkloadNetwork` through
 `/run/barenetes/cni.sock`, according to the `proto/cni/v1/cni.proto` contract.
+
+## Tests
+
+Depuis la racine du dépôt :
+
+```bash
+# Tests unitaires de la CNI
+cargo test -p cni
+
+# Vérification Clippy
+cargo clippy -p cni --all-targets -- -D warnings
+
+# Test d'intégration réseau complet (root requis)
+sudo ./cni/tests/integration.sh
+```
+
+Le test d'intégration crée temporairement des namespaces réseau, un bridge,
+des VLANs et un VXLAN. Il vérifie la connectivité dans un même VLAN,
+l'isolation entre VLANs, l'idempotence de l'API et le nettoyage de l'état.

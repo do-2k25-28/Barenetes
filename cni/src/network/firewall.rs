@@ -15,6 +15,20 @@ pub(crate) fn ensure_egress() -> io::Result<()> {
     ensure_jump("nat", "PREROUTING", PREROUTING_CHAIN)?;
     ensure_chain("filter", FORWARD_CHAIN)?;
     ensure_jump("filter", "FORWARD", FORWARD_CHAIN)?;
+    // Routed traffic between tenant VLAN interfaces must never be allowed.
+    // Same-VLAN traffic stays on the bridge and does not need this rule.
+    ensure_rule_first(&[
+        "-t",
+        "filter",
+        "-C",
+        FORWARD_CHAIN,
+        "-i",
+        "barenetes0+",
+        "-o",
+        "barenetes0+",
+        "-j",
+        "DROP",
+    ])?;
     ensure_rule(&[
         "-t",
         "nat",
@@ -191,6 +205,18 @@ fn ensure_rule(check: &[&str]) -> io::Result<()> {
     let mut add = check.to_vec();
     if let Some(position) = add.iter().position(|argument| *argument == "-C") {
         add[position] = "-A";
+    }
+    run(IPTABLES, &add)
+}
+
+fn ensure_rule_first(check: &[&str]) -> io::Result<()> {
+    if succeeds(IPTABLES, check)? {
+        return Ok(());
+    }
+    let mut add = check.to_vec();
+    if let Some(position) = add.iter().position(|argument| *argument == "-C") {
+        add[position] = "-I";
+        add.insert(position + 1, "1");
     }
     run(IPTABLES, &add)
 }

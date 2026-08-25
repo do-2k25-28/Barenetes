@@ -40,12 +40,20 @@ pub(crate) fn add_workload_network(
             ));
         }
         if !succeeds(IP, &["link", "show", "dev", &record.host_interface])? {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "workload network state exists but its host interface is missing",
-            ));
+            // Reconcile a durable record whose kernel interface disappeared.
+            super::firewall::delete_mappings(&record.ip_address, &record.port_mappings)?;
+            let address = record.ip_address.parse().map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "stored IP address is invalid")
+            })?;
+            pools.pool(record.vlan_id)?.release(address)?;
+            state.delete(
+                &workload.workload_name,
+                &workload.instance_name,
+                &network.network_name,
+            )?;
+        } else {
+            return Ok(record_to_network(&record));
         }
-        return Ok(record_to_network(&record));
     }
     for mapping in &request.port_mappings {
         if state.port_is_used(mapping.protocol, mapping.host_port)? {
@@ -224,19 +232,13 @@ pub(crate) fn delete_workload_network(
         .ip_address
         .parse()
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "stored IP address is invalid"))?;
+    // Keep the record if IPAM release fails so a retry can recover it.
+    pools.pool(record.vlan_id)?.release(address)?;
     state.delete(
         &workload.workload_name,
         &workload.instance_name,
         &network.network_name,
     )?;
-    match pools.pool(record.vlan_id) {
-        Ok(pool) => {
-            if let Err(error) = pool.release(address) {
-                eprintln!("cni: failed to release {address}: {error}");
-            }
-        }
-        Err(error) => eprintln!("cni: failed to release {address}: {error}"),
-    }
     Ok(true)
 }
 
