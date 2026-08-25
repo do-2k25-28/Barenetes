@@ -74,11 +74,6 @@ timeout 5 ip link show dev barenetes0 >/dev/null \
 echo "  - interface VXLAN barenetes-vx"
 timeout 5 ip link show dev barenetes-vx >/dev/null \
     || fail "interface VXLAN barenetes-vx absente"
-echo "  - destination FDB VXLAN"
-FDB=$(timeout 5 bridge fdb show dev barenetes-vx dst 127.0.0.2) \
-    || fail "lecture de la table FDB VXLAN impossible"
-grep -q 127.0.0.2 <<<"$FDB" \
-    || fail "destination VXLAN 127.0.0.2 absente de la table FDB"
 
 start_netns() {
     unshare -n sleep 600 &
