@@ -84,11 +84,18 @@ impl Store {
         self.pods.read().await.values().cloned().collect()
     }
 
+    /// Removes the pod by (namespace, name) and publishes a DELETED event under the same
+    /// write-lock guard, so a watcher can never observe the removal without the event, nor
+    /// see it out of order against a recreation of the same key. Returns the removed pod,
+    /// or `None` (publishing nothing) if no pod exists for that key.
     pub async fn remove_pod(&self, namespace: &str, name: &str) -> Option<PodDetail> {
-        self.pods
-            .write()
-            .await
-            .remove(&(namespace.to_string(), name.to_string()))
+        let mut pods = self.pods.write().await;
+        let pod = pods.remove(&(namespace.to_string(), name.to_string()))?;
+        self.publish_pod_event(WatchPodEvent {
+            event_type: EventType::Deleted as i32,
+            pod: Some(pod.clone()),
+        });
+        Some(pod)
     }
 
     /// Looks up the pod by (namespace, name) and applies `mutate` to it, then publishes
@@ -291,6 +298,36 @@ mod tests {
         store.upsert_pod(pod.clone()).await;
 
         assert_eq!(store.get_pod("default", "my-pod").await, Some(pod));
+    }
+
+    #[tokio::test]
+    async fn test_remove_pod_publishes_deleted() {
+        let store = Store::new();
+        store
+            .upsert_pod(test_support::pod_detail("default", "my-pod"))
+            .await;
+        let mut events = store.subscribe_pod_events();
+
+        let removed = store.remove_pod("default", "my-pod").await;
+
+        assert!(removed.is_some());
+        let event = events
+            .try_recv()
+            .expect("removing a pod should publish an event");
+        assert_eq!(event.event_type, EventType::Deleted as i32);
+        assert_eq!(event.pod, removed);
+    }
+
+    #[tokio::test]
+    async fn test_remove_pod_missing_publishes_nothing() {
+        let store = Store::new();
+        let mut events = store.subscribe_pod_events();
+
+        assert!(store.remove_pod("default", "ghost").await.is_none());
+        assert!(
+            events.try_recv().is_err(),
+            "removing a pod that doesn't exist must publish nothing"
+        );
     }
 
     #[tokio::test]

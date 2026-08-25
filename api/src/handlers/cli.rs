@@ -2,10 +2,9 @@
 use proto::api::v1::{
     CreatePodRequest, CreatePodResponse, DeletePodRequest, DeletePodResponse, GetNodeRequest,
     GetNodeResponse, GetPodRequest, GetPodResponse, ListNodesRequest, ListNodesResponse,
-    ListPodsRequest, ListPodsResponse, WatchDesiredStateEvent, WatchPodEvent,
-    watch_desired_state_event,
+    ListPodsRequest, ListPodsResponse, WatchDesiredStateEvent, watch_desired_state_event,
 };
-use proto::shared::v1::{EventType, PodDetail, PodStatus};
+use proto::shared::v1::{PodDetail, PodStatus};
 use tonic::{Request, Response, Status};
 
 use crate::service::ApiService;
@@ -89,11 +88,6 @@ impl ApiService {
             .remove_pod(&req.namespace, &req.name)
             .await
             .ok_or_else(|| crate::errors::pod_not_found(&req.namespace, &req.name))?;
-
-        self.store.publish_pod_event(WatchPodEvent {
-            event_type: EventType::Deleted as i32,
-            pod: Some(pod.clone()),
-        });
 
         if !pod.node_name.is_empty() {
             self.store
