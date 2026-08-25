@@ -258,13 +258,25 @@ impl Store {
                 Some(kv) => kv,
                 None => return Ok(false),
             };
+            let version = kv.version();
             let mut pod =
                 PodDetail::decode(kv.value()).map_err(|e| StoreError::Decode(e.to_string()))?;
             mutate(&mut pod);
-            client
-                .clone()
-                .put(etcd_key, pod.encode_to_vec(), None)
-                .await?;
+            let txn = etcd_client::Txn::new()
+                .when(vec![etcd_client::Compare::version(
+                    etcd_key.clone(),
+                    etcd_client::CompareOp::Equal,
+                    version,
+                )])
+                .and_then(vec![etcd_client::TxnOp::put(
+                    etcd_key,
+                    pod.encode_to_vec(),
+                    None,
+                )]);
+            let txn_resp = client.clone().txn(txn).await?;
+            if !txn_resp.succeeded() {
+                return Ok(false);
+            }
             self.publish_pod_event(WatchPodEvent {
                 event_type: event_type as i32,
                 pod: Some(pod),
