@@ -36,7 +36,7 @@ trap cleanup EXIT
 
 [[ "$(id -u)" == 0 ]] || fail "ce test doit être exécuté en root"
 
-for command in ip bridge iptables nsenter unshare; do
+for command in ip bridge iptables nsenter timeout unshare; do
     command -v "$command" >/dev/null || fail "commande manquante: $command"
 done
 
@@ -68,10 +68,17 @@ done
 [[ -S "$SOCKET" ]] || { cat "$TMP_DIR/cni.log" >&2; fail "socket CNI non créée"; }
 
 echo "[2/7] vérification bridge, VXLAN et firewall"
-ip link show dev barenetes0 >/dev/null
-ip link show dev barenetes-vx >/dev/null
-bridge fdb show dev barenetes-vx dst 127.0.0.2 | grep -q 127.0.0.2
-iptables -t filter -C BARENETES-FORWARD -i barenetes0+ -o barenetes0+ -j DROP
+timeout 5 ip link show dev barenetes0 >/dev/null \
+    || fail "bridge barenetes0 absent"
+timeout 5 ip link show dev barenetes-vx >/dev/null \
+    || fail "interface VXLAN barenetes-vx absente"
+FDB=$(timeout 5 bridge fdb show dev barenetes-vx dst 127.0.0.2) \
+    || fail "lecture de la table FDB VXLAN impossible"
+grep -q 127.0.0.2 <<<"$FDB" \
+    || fail "destination VXLAN 127.0.0.2 absente de la table FDB"
+timeout 5 iptables -t filter -C BARENETES-FORWARD \
+    -i barenetes0+ -o barenetes0+ -j DROP \
+    || fail "règle d'isolation inter-VLAN absente d'iptables"
 
 start_netns() {
     unshare -n sleep 600 &
