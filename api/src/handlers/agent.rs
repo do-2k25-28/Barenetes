@@ -8,7 +8,7 @@ use tokio_stream::StreamExt;
 use tonic::{Request, Response, Status};
 
 use crate::service::{ApiService, DesiredStateEventStream};
-use crate::validation::validate_dns1123_subdomain;
+use crate::validation::validate_opaque_id;
 
 impl ApiService {
     pub async fn update_pod_status_impl(
@@ -87,7 +87,7 @@ impl ApiService {
         let node = req
             .node
             .ok_or_else(|| crate::errors::missing_node("<unknown>"))?;
-        validate_dns1123_subdomain(&node.id, "node id")?;
+        validate_opaque_id(&node.id, "node id")?;
 
         self.store.upsert_and_publish_node(node).await;
 
@@ -99,7 +99,7 @@ impl ApiService {
         request: Request<WatchDesiredStateRequest>,
     ) -> Result<Response<DesiredStateEventStream>, Status> {
         let node_id = request.into_inner().node_id;
-        validate_dns1123_subdomain(&node_id, "node id")?;
+        validate_opaque_id(&node_id, "node id")?;
 
         // Opening with the node's current desired set, closed by SYNCED, is what lets an
         // agent reconcile on connect instead of missing whatever was published while it
@@ -372,6 +372,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_update_node_status_accepts_an_uppercase_id() {
+        let service = test_support::service();
+        // A ULID is uppercase by convention; the id is a key, not a hostname.
+        let id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+        service
+            .update_node_status_impl(update_node_status_request(id, NodeStatus::Ready))
+            .await
+            .expect("an uppercase id should be accepted");
+
+        assert!(service.store.get_node(id).await.is_some());
+    }
+
+    #[tokio::test]
     async fn test_update_node_status_malformed_id_rejected() {
         let service = test_support::service();
 
@@ -563,7 +577,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_watch_desired_state_empty_node_name_rejected() {
+    async fn test_watch_desired_state_empty_node_id_rejected() {
         let service = test_support::service();
 
         let err = service
@@ -577,7 +591,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_watch_desired_state_malformed_node_name_rejected() {
+    async fn test_watch_desired_state_malformed_node_id_rejected() {
         let service = test_support::service();
 
         let err = service
