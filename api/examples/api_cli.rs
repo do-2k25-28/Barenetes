@@ -102,7 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!(
                     "{:<20} status={:<10} cpu={}/{}m  mem={}/{}MB",
                     node.name,
-                    format!("{:?}", node.status),
+                    format!("{:?}", node.status()),
                     node.allocatable.as_ref().map_or(0, |r| r.cpu),
                     node.capacity.as_ref().map_or(0, |r| r.cpu),
                     node.allocatable.as_ref().map_or(0, |r| r.memory),
@@ -124,7 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some(n) => println!(
                     "name={}\nstatus={:?}\ncapacity:    cpu={}m  mem={}MB\nallocatable: cpu={}m  mem={}MB",
                     n.name,
-                    n.status,
+                    n.status(),
                     n.capacity.as_ref().map_or(0, |r| r.cpu),
                     n.capacity.as_ref().map_or(0, |r| r.memory),
                     n.allocatable.as_ref().map_or(0, |r| r.cpu),
@@ -376,7 +376,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .core
                     .as_ref()
                     .and_then(|c| c.pod.as_ref())
-                    .map_or("?".into(), |p| format!("{:?}", p.status));
+                    .map_or("?".into(), |p| format!("{:?}", p.status()));
                 println!("{:<20} status={:<10} node={}", name, status, pod.node_name,);
             }
         }
