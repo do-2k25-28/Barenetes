@@ -56,7 +56,7 @@ pub(crate) fn add_workload_network(
         }
     }
     for mapping in &request.port_mappings {
-        if state.port_is_used(mapping.protocol, mapping.host_port)? {
+        if state.port_is_used(mapping.protocol, mapping.external)? {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "host port is already used",
