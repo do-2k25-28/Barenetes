@@ -58,6 +58,11 @@ pub struct Store {
     /// Serializes the read-modify-write on a node between registration and the
     /// connect/disconnect transitions driven by the desired-state stream.
     node_op_lock: Mutex<()>,
+    /// How many desired-state streams are open per node. A node is READY while this is
+    /// above zero. Counting rather than flipping a flag is what makes a reconnect safe:
+    /// the outgoing stream's teardown is queued on the runtime and can land after the
+    /// replacement has already opened.
+    node_watchers: Mutex<HashMap<String, usize>>,
     // One channel per node, created lazily on first publish/subscribe
     desired_state_channels: RwLock<HashMap<String, broadcast::Sender<WatchDesiredStateEvent>>>,
 }
@@ -73,6 +78,7 @@ impl Store {
             pod_events: broadcast::channel(EVENT_CHANNEL_CAPACITY).0,
             node_events: broadcast::channel(EVENT_CHANNEL_CAPACITY).0,
             node_op_lock: Mutex::new(()),
+            node_watchers: Mutex::new(HashMap::new()),
             desired_state_channels: RwLock::new(HashMap::new()),
         }
     }
@@ -85,6 +91,7 @@ impl Store {
             pod_events: broadcast::channel(EVENT_CHANNEL_CAPACITY).0,
             node_events: broadcast::channel(EVENT_CHANNEL_CAPACITY).0,
             node_op_lock: Mutex::new(()),
+            node_watchers: Mutex::new(HashMap::new()),
             desired_state_channels: RwLock::new(HashMap::new()),
         }
     }
@@ -121,13 +128,12 @@ impl Store {
                 continue;
             }
             node.status = NodeStatus::NotReady as i32;
-            if let Err(e) = client
+            // Boot-critical: carrying on would serve a node as READY with no agent
+            // behind it, and there is no sweeper left to notice.
+            client
                 .clone()
                 .put(node_etcd_key(&node.name), node.encode_to_vec(), None)
-                .await
-            {
-                tracing::warn!(node = %node.name, error = %e, "failed to reset node at boot");
-            }
+                .await?;
         }
         Ok(())
     }
@@ -392,8 +398,8 @@ impl Store {
         Ok(true)
     }
 
-    /// Inserts or replaces a node and records this call as a liveness heartbeat,
-    /// then publishes the resulting ADDED (first report) or MODIFIED event.
+    /// Inserts or replaces a node, then publishes the resulting ADDED (first report)
+    /// or MODIFIED event.
     pub async fn upsert_and_publish_node(&self, node: Node) -> Result<(), StoreError> {
         let event_type = if let Some(ref client) = self.client {
             let _guard = self.node_op_lock.lock().await;
@@ -421,6 +427,47 @@ impl Store {
         Ok(())
     }
 
+    /// Records that a desired-state stream has opened for this node, marking it READY on
+    /// the first one. Returns `false` if the store has never heard of the node, so the
+    /// caller can tell the agent to register before watching.
+    ///
+    /// The count guard is held across the status write so the two can't disagree.
+    pub async fn node_watch_started(&self, name: &str) -> Result<bool, StoreError> {
+        let mut watchers = self.node_watchers.lock().await;
+        if self.get_node(name).await?.is_none() {
+            return Ok(false);
+        }
+
+        let count = watchers.entry(name.to_string()).or_insert(0);
+        *count += 1;
+        if *count == 1 {
+            self.set_node_status(name, NodeStatus::Ready).await?;
+        }
+        Ok(true)
+    }
+
+    /// Records that a stream has closed, marking the node NOT_READY once the last one
+    /// goes. Called from a `Drop`, so there is nowhere to return an error to.
+    pub async fn node_watch_ended(&self, name: &str) {
+        let mut watchers = self.node_watchers.lock().await;
+        let Some(count) = watchers.get_mut(name) else {
+            return;
+        };
+        *count = count.saturating_sub(1);
+        if *count > 0 {
+            return;
+        }
+
+        watchers.remove(name);
+        if let Err(e) = self.set_node_status(name, NodeStatus::NotReady).await {
+            tracing::warn!(
+                node = %name,
+                error = ?e,
+                "failed to mark node NotReady after its last watch ended"
+            );
+        }
+    }
+
     /// Sets the node's status and publishes the resulting MODIFIED event. Returns
     /// `false` if no node exists by that name, or if it already had that status, so a
     /// reconnecting agent doesn't republish an event that says nothing changed.
@@ -439,8 +486,12 @@ impl Store {
             let Some(kv) = resp.kvs().first() else {
                 return Ok(false);
             };
-            let mut node =
-                Node::decode(kv.value()).map_err(|e| StoreError::Decode(e.to_string()))?;
+            // Skip rather than propagate: this surfaces on the agent's watch, and
+            // failing it would lock that agent out permanently over one bad record.
+            let Ok(mut node) = Node::decode(kv.value()) else {
+                tracing::warn!(node = %name, "skipping undecodable node record");
+                return Ok(false);
+            };
             if node.status == status as i32 {
                 return Ok(false);
             }
@@ -507,8 +558,6 @@ impl Store {
         }
     }
 
-    /// Marks any node that hasn't reported a heartbeat within `timeout` as NOT_READY,
-    /// publishing a node MODIFIED event for each newly-stale node. Returns their names.
     // Publish is fire-and-forget: a `send` error just means nobody is subscribed yet,
     // which isn't a failure condition for an event that nobody asked to watch.
     pub fn publish_pod_event(&self, event: WatchPodEvent) {

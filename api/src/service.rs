@@ -11,7 +11,6 @@ use proto::api::v1::{
     UpdatePodStatusResponse, WatchDesiredStateEvent, WatchDesiredStateRequest, WatchNodeEvent,
     WatchNodesRequest, WatchPodEvent, WatchPodsRequest,
 };
-use proto::shared::v1::NodeStatus;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
@@ -81,22 +80,13 @@ impl<S: Stream + Unpin> Stream for NodeLivenessGuard<S> {
 
 impl<S> Drop for NodeLivenessGuard<S> {
     fn drop(&mut self) {
-        // Drop can't await, so hand the status write to the runtime. Nothing can be
-        // returned from here, so a failure is logged rather than swallowed: silently
-        // losing this leaves a node that is gone still advertised as READY.
+        // Drop can't await, so hand the bookkeeping to the runtime. That means this can
+        // land after a replacement stream has already opened, which is why the store
+        // counts watchers rather than flipping the node's status directly.
         let store = self.store.clone();
         let node_name = std::mem::take(&mut self.node_name);
         tokio::spawn(async move {
-            if let Err(e) = store
-                .set_node_status(&node_name, NodeStatus::NotReady)
-                .await
-            {
-                tracing::warn!(
-                    node = %node_name,
-                    error = ?e,
-                    "failed to mark node NotReady after its watch ended"
-                );
-            }
+            store.node_watch_ended(&node_name).await;
         });
     }
 }
