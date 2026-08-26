@@ -307,6 +307,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .and_then(|i| args.get(i + 1))
                 .and_then(|s| s.parse::<i32>().ok());
 
+            if cpu.is_some() != memory.is_some() {
+                eprintln!("--cpu and --memory must be provided together");
+                std::process::exit(2);
+            }
+
             // Collect --container name:STATE flags (repeatable).
             let container_statuses: Vec<ContainerStatus> = args
                 .windows(2)
@@ -342,14 +347,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     container_statuses,
                     pod_ip,
                     message,
-                    resource_usage: if cpu.is_some() || memory.is_some() {
-                        Some(Resources {
-                            cpu: cpu.unwrap_or(0),
-                            memory: memory.unwrap_or(0),
-                        })
-                    } else {
-                        None
-                    },
+                    resource_usage: cpu.map(|c| Resources {
+                        cpu: c,
+                        memory: memory.unwrap(),
+                    }),
                 })
                 .await?;
 
