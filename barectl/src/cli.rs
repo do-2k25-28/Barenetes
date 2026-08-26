@@ -7,7 +7,7 @@ const DEFAULT_SERVER_ADDR: &str = "http://127.0.0.1:50052";
 #[command(name = "barectl", version, about = "Command-line client for Barenetes")]
 pub struct Cli {
     /// Address of the API server (e.g. http://127.0.0.1:50052)
-    #[arg(long, global = true, env = "BARECTL_SERVER", default_value = DEFAULT_SERVER_ADDR)]
+    #[arg(long, global = true, env = "BARENETES_SERVER", default_value = DEFAULT_SERVER_ADDR)]
     pub server: String,
 
     #[command(subcommand)]
@@ -19,6 +19,10 @@ pub enum Commands {
     /// Create a pod with a single container
     #[command(name = "createPod")]
     CreatePod(CreatePodArgs),
+
+    /// Fetch a pod by name
+    #[command(name = "getPod")]
+    GetPod(GetPodArgs),
 }
 
 #[derive(Args)]
@@ -58,6 +62,17 @@ pub struct CreatePodArgs {
     /// Memory limit in MB
     #[arg(long = "memory-limit")]
     pub memory_limit: Option<i32>,
+}
+
+#[derive(Args)]
+pub struct GetPodArgs {
+    /// Pod name
+    #[arg(long)]
+    pub name: String,
+
+    /// Namespace the pod is in
+    #[arg(long, default_value = "default")]
+    pub namespace: String,
 }
 
 fn parse_port(raw: &str) -> Result<Port, String> {
