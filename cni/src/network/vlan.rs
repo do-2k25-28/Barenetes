@@ -18,19 +18,19 @@ pub(crate) fn interface_name(vlan: u8) -> String {
 pub(crate) fn ensure(vlan: u8, node: u8) -> io::Result<Ipv4Addr> {
     let name = interface_name(vlan);
     let vlan_string = vlan.to_string();
+    run(
+        BRIDGE,
+        &[
+            "vlan",
+            "add",
+            "dev",
+            bridge::BRIDGE_NAME,
+            "vid",
+            &vlan_string,
+            "self",
+        ],
+    )?;
     if !succeeds(IP, &["link", "show", "dev", &name])? {
-        run(
-            BRIDGE,
-            &[
-                "vlan",
-                "add",
-                "dev",
-                bridge::BRIDGE_NAME,
-                "vid",
-                &vlan_string,
-                "self",
-            ],
-        )?;
         run(
             IP,
             &[

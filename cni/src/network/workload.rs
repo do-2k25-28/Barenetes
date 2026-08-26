@@ -42,10 +42,7 @@ pub(crate) fn add_workload_network(
         if !succeeds(IP, &["link", "show", "dev", &record.host_interface])? {
             // Reconcile a durable record whose kernel interface disappeared.
             super::firewall::delete_mappings(&record.ip_address, &record.port_mappings)?;
-            let address = record.ip_address.parse().map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, "stored IP address is invalid")
-            })?;
-            pools.pool(record.vlan_id)?.release(address)?;
+            release_record_ip(pools, &record)?;
             state.delete(
                 &workload.workload_name,
                 &workload.instance_name,
@@ -228,18 +225,32 @@ pub(crate) fn delete_workload_network(
         run(IP, &["link", "delete", &record.host_interface])?;
     }
     super::firewall::delete_mappings(&record.ip_address, &record.port_mappings)?;
-    let address = record
-        .ip_address
-        .parse()
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "stored IP address is invalid"))?;
     // Keep the record if IPAM release fails so a retry can recover it.
-    pools.pool(record.vlan_id)?.release(address)?;
+    release_record_ip(pools, &record)?;
     state.delete(
         &workload.workload_name,
         &workload.instance_name,
         &network.network_name,
     )?;
     Ok(true)
+}
+
+fn release_record_ip(pools: &IpPoolDirectory, record: &WorkloadRecord) -> io::Result<()> {
+    let address = record
+        .ip_address
+        .parse()
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "stored IP address is invalid"))?;
+    match pools
+        .pool(record.vlan_id)
+        .and_then(|pool| pool.release(address))
+    {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::InvalidInput => {
+            eprintln!("cni: skipping IPAM release for legacy record {address}: {error}");
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn validate_add_request(

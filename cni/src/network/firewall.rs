@@ -9,6 +9,7 @@ const SYSCTL: &str = "sysctl";
 const FORWARD_CHAIN: &str = "BARENETES-FORWARD";
 const PREROUTING_CHAIN: &str = "BARENETES-PREROUTING";
 const OUTPUT_CHAIN: &str = "BARENETES-OUTPUT";
+const TENANT_INTERFACES: &str = "barenetes0.+";
 
 pub(crate) fn ensure_egress() -> io::Result<()> {
     run(SYSCTL, &["-q", "-w", "net.ipv4.ip_forward=1"])?;
@@ -26,9 +27,9 @@ pub(crate) fn ensure_egress() -> io::Result<()> {
         "-C",
         FORWARD_CHAIN,
         "-i",
-        "barenetes0+",
+        TENANT_INTERFACES,
         "-o",
-        "barenetes0+",
+        TENANT_INTERFACES,
         "-j",
         "DROP",
     ])?;
@@ -41,7 +42,7 @@ pub(crate) fn ensure_egress() -> io::Result<()> {
         "10.0.0.0/8",
         "!",
         "-o",
-        BRIDGE_NAME,
+        "barenetes0+",
         "-j",
         "MASQUERADE",
     ])?;
@@ -63,7 +64,7 @@ pub(crate) fn ensure_egress() -> io::Result<()> {
         "-C",
         FORWARD_CHAIN,
         "-i",
-        BRIDGE_NAME,
+        TENANT_INTERFACES,
         "-j",
         "ACCEPT",
     ])?;
@@ -73,7 +74,7 @@ pub(crate) fn ensure_egress() -> io::Result<()> {
         "-C",
         FORWARD_CHAIN,
         "-o",
-        BRIDGE_NAME,
+        TENANT_INTERFACES,
         "-j",
         "ACCEPT",
     ])

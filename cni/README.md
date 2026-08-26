@@ -41,7 +41,7 @@ BARENETES_REMOTE_NODE_IPS=192.168.1.11 \
 TCP/UDP firewall forwarding in `AddWorkloadNetwork`:
 
 ```json
-{"port_mappings": [{"host_port": 8080, "workload_port": 80, "protocol": "PORT_PROTOCOL_TCP"}]}
+{"port_mappings": [{"external": 8080, "internal": 80, "protocol": "TCP"}]}
 ```
 
 The agent then uses `GetWorkloadNetwork` and `DeleteWorkloadNetwork` through
