@@ -38,6 +38,6 @@ message PodDetail {
   optional string pod_ip = 3;
   optional string message = 4;
   Resources resource_usage = 5;
-  string node_name = 6;
+  string node_id = 6;
   optional string unschedulable_reason = 7;
 }

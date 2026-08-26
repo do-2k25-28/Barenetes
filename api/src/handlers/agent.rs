@@ -87,9 +87,7 @@ impl ApiService {
         let node = req
             .node
             .ok_or_else(|| crate::errors::missing_node("<unknown>"))?;
-        if node.name.is_empty() {
-            return Err(Status::invalid_argument("missing node name"));
-        }
+        validate_dns1123_subdomain(&node.id, "node id")?;
 
         self.store.upsert_and_publish_node(node).await;
 
@@ -100,8 +98,8 @@ impl ApiService {
         &self,
         request: Request<WatchDesiredStateRequest>,
     ) -> Result<Response<DesiredStateEventStream>, Status> {
-        let node_name = request.into_inner().node_name;
-        validate_dns1123_subdomain(&node_name, "node name")?;
+        let node_id = request.into_inner().node_id;
+        validate_dns1123_subdomain(&node_id, "node id")?;
 
         // Opening with the node's current desired set, closed by SYNCED, is what lets an
         // agent reconcile on connect instead of missing whatever was published while it
@@ -109,7 +107,7 @@ impl ApiService {
         // between them.
         let (assigned, receiver) = self
             .store
-            .subscribe_desired_state_with_snapshot(&node_name)
+            .subscribe_desired_state_with_snapshot(&node_id)
             .await;
 
         let snapshot = assigned.into_iter().map(|pod| {
@@ -221,7 +219,7 @@ mod tests {
     async fn update_pod_status_preserves_scheduler_owned_fields() {
         let service = test_support::service();
         let mut seed = test_support::pod_detail("default", "web");
-        seed.node_name = "node-a".to_string();
+        seed.node_id = "node-a".to_string();
         seed.unschedulable_reason = Some("no node fits".to_string());
         if let Some(core_pod) = seed.core.as_mut().and_then(|core| core.pod.as_mut()) {
             core_pod.requests = Some(Resources {
@@ -237,7 +235,7 @@ mod tests {
             .unwrap();
 
         let pod = service.store.get_pod("default", "web").await.unwrap();
-        assert_eq!(pod.node_name, "node-a");
+        assert_eq!(pod.node_id, "node-a");
         assert_eq!(pod.unschedulable_reason.as_deref(), Some("no node fits"));
         let core_pod = pod
             .core
@@ -361,21 +359,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_update_node_status_blank_name_rejected() {
+    async fn test_update_node_status_blank_id_rejected() {
         let service = test_support::service();
 
         let err = service
             .update_node_status_impl(update_node_status_request("", NodeStatus::Ready))
             .await
-            .expect_err("a blank node name should be rejected");
+            .expect_err("a blank node id should be rejected");
 
         assert_eq!(err.code(), Code::InvalidArgument);
-        assert_eq!(err.message(), "missing node name");
+        assert_eq!(err.message(), "node id must not be empty");
     }
 
-    fn watch_desired_state_request(node_name: &str) -> Request<WatchDesiredStateRequest> {
+    #[tokio::test]
+    async fn test_update_node_status_malformed_id_rejected() {
+        let service = test_support::service();
+
+        let err = service
+            .update_node_status_impl(update_node_status_request("Node_A!", NodeStatus::Ready))
+            .await
+            .expect_err("a malformed node id should be rejected");
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    fn watch_desired_state_request(node_id: &str) -> Request<WatchDesiredStateRequest> {
         Request::new(WatchDesiredStateRequest {
-            node_name: node_name.to_string(),
+            node_id: node_id.to_string(),
         })
     }
 
@@ -433,9 +443,9 @@ mod tests {
         assert_eq!(event.action, watch_desired_state_event::Action::Run as i32);
     }
 
-    fn assigned_pod(namespace: &str, name: &str, node_name: &str) -> PodDetail {
+    fn assigned_pod(namespace: &str, name: &str, node_id: &str) -> PodDetail {
         let mut pod = test_support::pod_detail(namespace, name);
-        pod.node_name = node_name.to_string();
+        pod.node_id = node_id.to_string();
         pod
     }
 
@@ -563,7 +573,7 @@ mod tests {
             .expect_err("a blank node name should be rejected");
 
         assert_eq!(err.code(), Code::InvalidArgument);
-        assert_eq!(err.message(), "node name must not be empty");
+        assert_eq!(err.message(), "node id must not be empty");
     }
 
     #[tokio::test]

@@ -89,10 +89,10 @@ impl ApiService {
             .await
             .ok_or_else(|| crate::errors::pod_not_found(&req.namespace, &req.name))?;
 
-        if !pod.node_name.is_empty() {
+        if !pod.node_id.is_empty() {
             self.store
                 .publish_desired_state_event(
-                    &pod.node_name,
+                    &pod.node_id,
                     WatchDesiredStateEvent {
                         action: watch_desired_state_event::Action::Stop as i32,
                         pod: pod.core,
@@ -132,9 +132,9 @@ impl ApiService {
         let req = request.into_inner();
         let node = self
             .store
-            .get_node(&req.name)
+            .get_node(&req.id)
             .await
-            .ok_or_else(|| crate::errors::node_not_found(&req.name))?;
+            .ok_or_else(|| crate::errors::node_not_found(&req.id))?;
         Ok(Response::new(GetNodeResponse { node: Some(node) }))
     }
 
@@ -192,7 +192,7 @@ mod tests {
 
     fn get_node_request(name: &str) -> Request<GetNodeRequest> {
         Request::new(GetNodeRequest {
-            name: name.to_string(),
+            id: name.to_string(),
         })
     }
 
@@ -379,7 +379,7 @@ mod tests {
             .get_pod("default", "my-pod")
             .await
             .expect("pod should be in the store");
-        assert_eq!(stored.node_name, "");
+        assert_eq!(stored.node_id, "");
     }
 
     #[tokio::test]
@@ -622,7 +622,7 @@ mod tests {
         let service = service();
         // create_pod never assigns a node, so seed a scheduled pod directly.
         let mut scheduled = test_support::pod_detail("default", "my-pod");
-        scheduled.node_name = "node-a".to_string();
+        scheduled.node_id = "node-a".to_string();
         service.store.upsert_pod(scheduled.clone()).await;
 
         let mut desired_state_events = service.store.subscribe_desired_state_events("node-a").await;
@@ -643,7 +643,7 @@ mod tests {
     async fn test_delete_pod_stop_goes_only_to_the_assigned_node() {
         let service = service();
         let mut scheduled = test_support::pod_detail("default", "my-pod");
-        scheduled.node_name = "node-a".to_string();
+        scheduled.node_id = "node-a".to_string();
         service.store.upsert_pod(scheduled).await;
 
         let mut other_node = service.store.subscribe_desired_state_events("node-b").await;

@@ -46,13 +46,13 @@ impl ApiService {
             outcome.ok_or_else(|| Status::invalid_argument("missing assignment outcome"))?;
 
         match outcome {
-            assign_pod_request::Outcome::NodeName(node_name) => {
+            assign_pod_request::Outcome::NodeId(node_id) => {
                 // The agent needs the spec to run the pod, so carry it out of the guard.
                 let mut placed = None;
                 let found = self
                     .store
                     .update_and_publish_pod(&namespace, &name, EventType::Scheduled, |detail| {
-                        detail.node_name = node_name.clone();
+                        detail.node_id = node_id.clone();
                         detail.unschedulable_reason = None;
                         placed = detail.core.clone();
                     })
@@ -63,7 +63,7 @@ impl ApiService {
 
                 self.store
                     .publish_desired_state_event(
-                        &node_name,
+                        &node_id,
                         WatchDesiredStateEvent {
                             action: watch_desired_state_event::Action::Run as i32,
                             pod: placed,
@@ -112,8 +112,8 @@ mod tests {
         })
     }
 
-    fn placed_on(node_name: &str) -> Option<assign_pod_request::Outcome> {
-        Some(assign_pod_request::Outcome::NodeName(node_name.to_string()))
+    fn placed_on(node_id: &str) -> Option<assign_pod_request::Outcome> {
+        Some(assign_pod_request::Outcome::NodeId(node_id.to_string()))
     }
 
     fn unschedulable(reason: &str) -> Option<assign_pod_request::Outcome> {
@@ -216,7 +216,7 @@ mod tests {
             .expect("assignment should succeed");
 
         let stored = service.store.get_pod("default", "my-pod").await.unwrap();
-        assert_eq!(stored.node_name, "node-a");
+        assert_eq!(stored.node_id, "node-a");
 
         let pod_event = pod_events
             .try_recv()
@@ -253,7 +253,7 @@ mod tests {
             stored.unschedulable_reason.as_deref(),
             Some("no node with enough memory")
         );
-        assert_eq!(stored.node_name, "", "an unplaced pod keeps no node");
+        assert_eq!(stored.node_id, "", "an unplaced pod keeps no node");
 
         let pod_event = pod_events
             .try_recv()
@@ -275,7 +275,7 @@ mod tests {
 
         let stored = service.store.get_pod("default", "my-pod").await.unwrap();
         assert_eq!(stored.unschedulable_reason, None);
-        assert_eq!(stored.node_name, "node-a");
+        assert_eq!(stored.node_id, "node-a");
     }
 
     #[tokio::test]

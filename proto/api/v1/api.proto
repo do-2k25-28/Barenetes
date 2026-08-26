@@ -38,7 +38,7 @@ message ListPodsResponse {
 }
 
 message GetNodeRequest {
-  string name = 1;
+  string id = 1;
 }
 message GetNodeResponse {
   shared.v1.Node node = 1;
@@ -68,7 +68,7 @@ message AssignPodRequest { // Scheduler reports the outcome of trying to place a
   string name = 1;
   string namespace = 2;
   oneof outcome {
-    string node_name = 3; // scheduler placed the pod here
+    string node_id = 3; // scheduler placed the pod here
     string unschedulable_reason = 4; // scheduler couldn't find a fit
   }
 }
@@ -82,7 +82,7 @@ message UpdatePodStatusRequest {
   optional string pod_ip = 3; // absent means "no change"
   optional string message = 4; // absent means "no change"
   shared.v1.Resources resource_usage = 5;
-  // node_name is not reportable here: node assignment is the scheduler's authority (AssignPod).
+  // node_id is not reportable here: node assignment is the scheduler's authority (AssignPod).
 }
 message UpdatePodStatusResponse {}
 
@@ -92,7 +92,7 @@ message UpdateNodeStatusRequest {
 message UpdateNodeStatusResponse {}
 
 message WatchDesiredStateRequest { // agent subscribes to desired state for its node
-  string node_name = 1;
+  string node_id = 1;
 }
 
 message WatchDesiredStateEvent {

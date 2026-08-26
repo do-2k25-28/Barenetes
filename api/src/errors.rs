@@ -6,12 +6,12 @@ pub(crate) fn pod_not_found(namespace: &str, name: &str) -> Status {
     Status::not_found(format!("pod {namespace}/{name} not found"))
 }
 
-pub(crate) fn node_not_found(name: &str) -> Status {
-    Status::not_found(format!("node {name} not found"))
+pub(crate) fn node_not_found(id: &str) -> Status {
+    Status::not_found(format!("node {id} not found"))
 }
 
-pub(crate) fn missing_node(name: &str) -> Status {
-    Status::invalid_argument(format!("missing node {name}"))
+pub(crate) fn missing_node(id: &str) -> Status {
+    Status::invalid_argument(format!("missing node {id}"))
 }
 
 pub(crate) fn pod_already_exists(namespace: &str, name: &str) -> Status {

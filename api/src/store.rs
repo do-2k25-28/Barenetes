@@ -138,10 +138,10 @@ impl Store {
     /// before the ADDED of the node it refers to
     pub async fn upsert_and_publish_node(&self, node: Node) {
         let mut last_seen = self.node_last_seen.write().await;
-        last_seen.insert(node.name.clone(), Instant::now());
+        last_seen.insert(node.id.clone(), Instant::now());
 
         let mut nodes = self.nodes.write().await;
-        let event_type = match nodes.insert(node.name.clone(), node.clone()) {
+        let event_type = match nodes.insert(node.id.clone(), node.clone()) {
             None => EventType::Added,
             Some(_) => EventType::Modified,
         };
@@ -151,8 +151,8 @@ impl Store {
         });
     }
 
-    pub async fn get_node(&self, name: &str) -> Option<Node> {
-        self.nodes.read().await.get(name).cloned()
+    pub async fn get_node(&self, id: &str) -> Option<Node> {
+        self.nodes.read().await.get(id).cloned()
     }
 
     pub async fn list_nodes(&self) -> Vec<Node> {
@@ -160,23 +160,23 @@ impl Store {
     }
 
     /// Marks any node that hasn't reported a heartbeat within `timeout` as NOT_READY,
-    /// publishing a node MODIFIED event for each newly-stale node. Returns their names.
+    /// publishing a node MODIFIED event for each newly-stale node. Returns their ids.
     pub async fn sweep_stale_nodes(&self, timeout: Duration) -> Vec<String> {
         let now = Instant::now();
-        let stale_names: Vec<String> = {
+        let stale_ids: Vec<String> = {
             let last_seen = self.node_last_seen.read().await;
             last_seen
                 .iter()
                 .filter(|(_, seen)| now.saturating_duration_since(**seen) >= timeout)
-                .map(|(name, _)| name.clone())
+                .map(|(id, _)| id.clone())
                 .collect()
         };
 
         let mut newly_stale = Vec::new();
         {
             let mut nodes = self.nodes.write().await;
-            for name in &stale_names {
-                if let Some(node) = nodes.get_mut(name)
+            for id in &stale_ids {
+                if let Some(node) = nodes.get_mut(id)
                     && node.status != NodeStatus::NotReady as i32
                 {
                     node.status = NodeStatus::NotReady as i32;
@@ -192,7 +192,7 @@ impl Store {
             });
         }
 
-        newly_stale.into_iter().map(|node| node.name).collect()
+        newly_stale.into_iter().map(|node| node.id).collect()
     }
 
     // Publish is fire-and-forget: a `send` error just means nobody is subscribed yet,
@@ -213,22 +213,18 @@ impl Store {
         self.node_events.subscribe()
     }
 
-    pub async fn publish_desired_state_event(
-        &self,
-        node_name: &str,
-        event: WatchDesiredStateEvent,
-    ) {
-        if let Some(sender) = self.desired_state_channels.read().await.get(node_name) {
+    pub async fn publish_desired_state_event(&self, node_id: &str, event: WatchDesiredStateEvent) {
+        if let Some(sender) = self.desired_state_channels.read().await.get(node_id) {
             let _ = sender.send(event);
         }
     }
 
-    /// Snapshots the pods currently assigned to `node_name` and subscribes to its
+    /// Snapshots the pods currently assigned to `node_id` and subscribes to its
     /// desired-state channel under a single `pods` read guard, so no assignment or
     /// deletion can slip between the two and be missed by the caller.
     pub async fn subscribe_desired_state_with_snapshot(
         &self,
-        node_name: &str,
+        node_id: &str,
     ) -> (
         Vec<PodWithSpec>,
         broadcast::Receiver<WatchDesiredStateEvent>,
@@ -236,26 +232,26 @@ impl Store {
         let pods = self.pods.read().await;
         let assigned = pods
             .values()
-            .filter(|pod| pod.node_name == node_name)
+            .filter(|pod| pod.node_id == node_id)
             .filter_map(|pod| pod.core.clone())
             .collect();
-        let receiver = self.subscribe_desired_state_events(node_name).await;
+        let receiver = self.subscribe_desired_state_events(node_id).await;
 
         (assigned, receiver)
     }
 
-    /// Get-or-create the channel for `node_name` and subscribe to it, evicting channels
+    /// Get-or-create the channel for `node_id` and subscribe to it, evicting channels
     /// nobody is listening on any more along the way
     pub async fn subscribe_desired_state_events(
         &self,
-        node_name: &str,
+        node_id: &str,
     ) -> broadcast::Receiver<WatchDesiredStateEvent> {
         let mut channels = self.desired_state_channels.write().await;
 
         channels.retain(|_, sender| sender.receiver_count() > 0);
 
         channels
-            .entry(node_name.to_string())
+            .entry(node_id.to_string())
             .or_insert_with(|| broadcast::channel(EVENT_CHANNEL_CAPACITY).0)
             .subscribe()
     }
@@ -360,14 +356,14 @@ mod tests {
 
         let found = store
             .update_and_publish_pod("default", "my-pod", EventType::Scheduled, |pod| {
-                pod.node_name = "node-1".to_string();
+                pod.node_id = "node-1".to_string();
             })
             .await;
 
         assert!(found);
         let event = events.try_recv().expect("an event should be published");
         assert_eq!(event.event_type, EventType::Scheduled as i32);
-        assert_eq!(event.pod.unwrap().node_name, "node-1");
+        assert_eq!(event.pod.unwrap().node_id, "node-1");
     }
 
     #[tokio::test]
@@ -400,6 +396,44 @@ mod tests {
             !store.update_pod_status("default", "ghost", |_| {}).await,
             "updating a missing pod should return false"
         );
+    }
+
+    #[tokio::test]
+    async fn test_nodes_are_keyed_by_id_not_hostname() {
+        let store = Store::new();
+        let mut first = test_support::node("node-a", NodeStatus::Ready);
+        first.name = "same-hostname".to_string();
+        let mut second = test_support::node("node-b", NodeStatus::Ready);
+        second.name = "same-hostname".to_string();
+
+        store.upsert_and_publish_node(first).await;
+        store.upsert_and_publish_node(second).await;
+
+        assert_eq!(
+            store.list_nodes().await.len(),
+            2,
+            "two ids sharing a hostname are two distinct nodes"
+        );
+        assert!(store.get_node("node-a").await.is_some());
+        assert!(store.get_node("same-hostname").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_renaming_a_node_keeps_its_identity() {
+        let store = Store::new();
+        let mut node = test_support::node("node-a", NodeStatus::Ready);
+        node.name = "before".to_string();
+        store.upsert_and_publish_node(node.clone()).await;
+
+        node.name = "after".to_string();
+        store.upsert_and_publish_node(node).await;
+
+        assert_eq!(
+            store.list_nodes().await.len(),
+            1,
+            "hostname change is an update, not a new node"
+        );
+        assert_eq!(store.get_node("node-a").await.unwrap().name, "after");
     }
 
     #[tokio::test]

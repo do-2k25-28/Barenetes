@@ -33,14 +33,16 @@ pub(crate) fn pod_detail(namespace: &str, name: &str) -> PodDetail {
         pod_ip: None,
         message: None,
         resource_usage: None,
-        node_name: String::new(),
+        node_id: String::new(),
         unschedulable_reason: None,
     }
 }
 
-pub(crate) fn node(name: &str, status: NodeStatus) -> Node {
+pub(crate) fn node(id: &str, status: NodeStatus) -> Node {
     Node {
-        name: name.to_string(),
+        id: id.to_string(),
+        // Tests don't distinguish the hostname from the identity.
+        name: id.to_string(),
         status: status as i32,
         capacity: None,
         allocatable: None,
