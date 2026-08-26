@@ -64,19 +64,20 @@ sudo ./cni/tests/integration.sh
 ```
 
 Le test d'intégration crée temporairement un réseau Linux isolé afin de ne pas
-modifier le réseau principal de la machine. Il exécute les étapes suivantes :
+modifier le réseau principal de la machine. Il force aussi
+`bridge-nf-call-iptables=1` et la politique `FORWARD=DROP` pour tester le
+chemin du bridge avec `br_netfilter`. Il exécute quatre parcours :
 
-1. Démarrage du daemon CNI et création du socket Unix.
-2. Vérification du bridge `barenetes0` et de l'interface VXLAN.
-3. Connexion de deux workloads au même VLAN avec `AddWorkloadNetwork`.
-4. Connexion d'un troisième workload à un autre VLAN.
-5. Vérification que les workloads du même VLAN communiquent et que le trafic
-   inter-VLAN est bloqué, avec contrôle de l'adresse IPv4 de la gateway, de
-   l'adresse du workload et de sa route par défaut.
-6. Vérification de `GetWorkloadNetwork`, de l'ADD idempotent et de
-   `DeleteWorkloadNetwork`.
-7. Vérification que les fichiers d'état des workloads sont supprimés.
+1. Un nœud avec un workload.
+2. Un nœud avec plusieurs workloads.
+3. Plusieurs nœuds avec un workload par nœud, reliés par VXLAN.
+4. Plusieurs nœuds avec plusieurs workloads par nœud, reliés par VXLAN.
 
-Le script affiche `OK - intégration CNI complète réussie` uniquement si toutes
-les étapes réussissent. Il nettoie automatiquement les namespaces, le daemon,
-le socket et les fichiers d'état temporaires, même en cas d'échec.
+Chaque parcours vérifie la connexion réseau, l'adressage IPv4 et le nettoyage
+des états. Les scénarios multi-nœuds lancent deux daemons CNI dans deux
+namespaces réseau séparés et utilisent un bridge de transport temporaire.
+
+Le script affiche `OK - les quatre parcours CNI ont réussi` uniquement si toutes
+les étapes réussissent. Il nettoie automatiquement les namespaces, les
+daemons, le bridge de transport, les sockets et les fichiers d'état temporaires,
+même en cas d'échec.
