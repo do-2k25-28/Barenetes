@@ -28,17 +28,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let store = Arc::new(Store::new());
 
-    let liveness_store = store.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(store::HEARTBEAT_INTERVAL);
-        loop {
-            interval.tick().await;
-            liveness_store
-                .sweep_stale_nodes(store::NODE_STALE_TIMEOUT)
-                .await;
-        }
-    });
-
     let api_service = ApiService { store };
 
     tracing::info!(%addr, "API server starting");

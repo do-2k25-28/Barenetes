@@ -126,7 +126,19 @@ impl ApiService {
         let opening = tokio_stream::iter(snapshot.chain(synced));
         let live = crate::service::broadcast_to_stream(receiver, "watch_desired_state");
 
-        Ok(Response::new(Box::pin(opening.chain(live))))
+        // The stream is the node's liveness: holding it open means the agent is alive, and
+        // the guard marks the node NOT_READY once it ends. A node that never opens one is
+        // left alone, since nothing here can tell "not started yet" from "gone".
+        self.store
+            .set_node_status(&node_name, proto::shared::v1::NodeStatus::Ready)
+            .await;
+        let stream = crate::service::NodeLivenessGuard::new(
+            opening.chain(live),
+            self.store.clone(),
+            node_name,
+        );
+
+        Ok(Response::new(Box::pin(stream)))
     }
 }
 
@@ -437,6 +449,91 @@ mod tests {
         let mut pod = test_support::pod_detail(namespace, name);
         pod.node_name = node_name.to_string();
         pod
+    }
+
+    #[tokio::test]
+    async fn test_watching_marks_the_node_ready() {
+        let service = test_support::service();
+        service
+            .store
+            .upsert_and_publish_node(node("node-a", NodeStatus::NotReady))
+            .await;
+
+        let _stream = service
+            .watch_desired_state_impl(watch_desired_state_request("node-a"))
+            .await
+            .unwrap()
+            .into_inner();
+
+        let stored = service.store.get_node("node-a").await.unwrap();
+        assert_eq!(stored.status, NodeStatus::Ready as i32);
+    }
+
+    #[tokio::test]
+    async fn test_dropping_the_stream_marks_the_node_not_ready() {
+        let service = test_support::service();
+        service
+            .store
+            .upsert_and_publish_node(node("node-a", NodeStatus::Ready))
+            .await;
+
+        let stream = service
+            .watch_desired_state_impl(watch_desired_state_request("node-a"))
+            .await
+            .unwrap()
+            .into_inner();
+        drop(stream);
+
+        // Drop hands the write to the runtime, so let it run.
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        let stored = service.store.get_node("node-a").await.unwrap();
+        assert_eq!(
+            stored.status,
+            NodeStatus::NotReady as i32,
+            "a node whose agent disconnected must not stay Ready"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_disconnect_publishes_a_node_event() {
+        let service = test_support::service();
+        service
+            .store
+            .upsert_and_publish_node(node("node-a", NodeStatus::Ready))
+            .await;
+        let mut node_events = service.store.subscribe_node_events();
+
+        let stream = service
+            .watch_desired_state_impl(watch_desired_state_request("node-a"))
+            .await
+            .unwrap()
+            .into_inner();
+        drop(stream);
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        let event = node_events
+            .try_recv()
+            .expect("a disconnect should publish a node event");
+        assert_eq!(event.event_type, EventType::Modified as i32);
+        assert_eq!(event.node.unwrap().status, NodeStatus::NotReady as i32);
+    }
+
+    #[tokio::test]
+    async fn test_watching_an_unregistered_node_is_harmless() {
+        let service = test_support::service();
+
+        let stream = service
+            .watch_desired_state_impl(watch_desired_state_request("ghost"))
+            .await
+            .expect("watching before registering should still open a stream")
+            .into_inner();
+        drop(stream);
+        tokio::task::yield_now().await;
+
+        assert!(service.store.get_node("ghost").await.is_none());
     }
 
     #[tokio::test]
