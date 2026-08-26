@@ -79,6 +79,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(2);
     }
 
+    // Reject a flag in the pod-name position for create-pod.
+    if sub == Some("create-pod") && args[1].starts_with("--") {
+        eprintln!("error: pod name must not be a flag");
+        std::process::exit(2);
+    }
+
     let mut client = ApiServerClient::connect(API).await?;
 
     match sub {
@@ -159,19 +165,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         Some("create-pod") => {
             let name = args[1].clone();
-            let namespace = args
-                .iter()
-                .position(|a| a == "--namespace")
-                .and_then(|i| args.get(i + 1))
-                .cloned()
-                .unwrap_or_default();
 
-            // Everything between the name and --namespace is an image.
-            let end = args
+            // Images are everything between the name and the first --flag.
+            let first_flag = args[2..]
                 .iter()
-                .position(|a| a == "--namespace")
+                .position(|a| a.starts_with("--"))
+                .map(|i| i + 2)
                 .unwrap_or(args.len());
-            let containers = args[2..end]
+            let containers = args[2..first_flag]
                 .iter()
                 .enumerate()
                 .map(|(i, image)| Container {
@@ -180,6 +181,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..Default::default()
                 })
                 .collect();
+
+            let namespace = args
+                .iter()
+                .position(|a| a == "--namespace")
+                .and_then(|i| args.get(i + 1))
+                .cloned()
+                .unwrap_or_else(|| "default".to_string());
 
             let response = client
                 .create_pod(CreatePodRequest {
@@ -211,7 +219,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .position(|a| a == "--namespace")
                 .and_then(|i| args.get(i + 1))
                 .cloned()
-                .unwrap_or_default();
+                .unwrap_or_else(|| "default".to_string());
 
             let deleted = client
                 .delete_pod(DeletePodRequest { name, namespace })
@@ -380,7 +388,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .position(|a| a == "--namespace")
                 .and_then(|i| args.get(i + 1))
                 .cloned()
-                .unwrap_or_default();
+                .unwrap_or_else(|| "default".to_string());
 
             let pod = client
                 .get_pod(GetPodRequest { name, namespace })
