@@ -1,12 +1,10 @@
 use prost::Message;
 use std::collections::HashMap;
 use std::fmt;
-use std::time::Duration;
 
 use proto::api::v1::{WatchDesiredStateEvent, WatchNodeEvent, WatchPodEvent};
 use proto::shared::v1::{EventType, Node, NodeStatus, PodDetail, PodWithSpec};
 use tokio::sync::{Mutex, RwLock, broadcast};
-use tokio::time::Instant;
 
 #[derive(Debug)]
 pub enum StoreError {
@@ -42,13 +40,6 @@ impl From<etcd_client::Error> for StoreError {
 
 const EVENT_CHANNEL_CAPACITY: usize = 128;
 
-/// Expected interval between UpdateNodeStatus heartbeats from a live agent.
-pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
-/// A node is considered stale after this many missed heartbeats.
-pub const HEARTBEAT_TIMEOUT_MULTIPLIER: u32 = 3;
-pub const NODE_STALE_TIMEOUT: Duration =
-    Duration::from_secs(HEARTBEAT_INTERVAL.as_secs() * HEARTBEAT_TIMEOUT_MULTIPLIER as u64);
-
 /// TODO: currently in-memory only for now, will need replacing with a database
 // (etcd may be overkill for the minimal version we are trying to achieve,
 // so could look at some alternatives)
@@ -62,10 +53,10 @@ pub struct Store {
     client: Option<etcd_client::Client>,
     pods: RwLock<HashMap<(String, String), PodDetail>>,
     nodes: RwLock<HashMap<String, Node>>,
-    node_last_seen: RwLock<HashMap<String, Instant>>,
     pod_events: broadcast::Sender<WatchPodEvent>,
     node_events: broadcast::Sender<WatchNodeEvent>,
-    /// Serializes the read-modify-write on a node between heartbeat and sweeper.
+    /// Serializes the read-modify-write on a node between registration and the
+    /// connect/disconnect transitions driven by the desired-state stream.
     node_op_lock: Mutex<()>,
     // One channel per node, created lazily on first publish/subscribe
     desired_state_channels: RwLock<HashMap<String, broadcast::Sender<WatchDesiredStateEvent>>>,
@@ -79,7 +70,6 @@ impl Store {
             client: None,
             pods: RwLock::new(HashMap::new()),
             nodes: RwLock::new(HashMap::new()),
-            node_last_seen: RwLock::new(HashMap::new()),
             pod_events: broadcast::channel(EVENT_CHANNEL_CAPACITY).0,
             node_events: broadcast::channel(EVENT_CHANNEL_CAPACITY).0,
             node_op_lock: Mutex::new(()),
@@ -92,7 +82,6 @@ impl Store {
             client: Some(client),
             pods: RwLock::new(HashMap::new()),
             nodes: RwLock::new(HashMap::new()),
-            node_last_seen: RwLock::new(HashMap::new()),
             pod_events: broadcast::channel(EVENT_CHANNEL_CAPACITY).0,
             node_events: broadcast::channel(EVENT_CHANNEL_CAPACITY).0,
             node_op_lock: Mutex::new(()),
@@ -100,10 +89,13 @@ impl Store {
         }
     }
 
-    /// Populate `node_last_seen` from persisted etcd nodes so the sweeper
-    /// can see them. Each node is marked as "just seen" so it must send a
-    /// heartbeat within the normal timeout to stay Ready.
-    pub async fn load_node_liveness(&self) -> Result<(), StoreError> {
+    /// Marks every persisted node NOT_READY at boot.
+    ///
+    /// Node status survives a restart in etcd, but the streams that prove a node is alive
+    /// do not. Without this the server would come back advertising nodes as READY on the
+    /// strength of a connection that died with the previous process. Each node returns to
+    /// READY when its agent opens a desired-state stream.
+    pub async fn reset_node_liveness(&self) -> Result<(), StoreError> {
         let client = match self.client {
             Some(ref c) => c.clone(),
             None => return Ok(()),
@@ -115,17 +107,26 @@ impl Store {
                 Some(etcd_client::GetOptions::default().with_prefix()),
             )
             .await?;
-        let mut last_seen = self.node_last_seen.write().await;
+        let _guard = self.node_op_lock.lock().await;
         for kv in resp.kvs() {
-            match Node::decode(kv.value()) {
-                Ok(node) => {
-                    last_seen.insert(node.name, Instant::now());
-                }
+            let mut node = match Node::decode(kv.value()) {
+                Ok(node) => node,
                 Err(e) => {
                     let key = String::from_utf8_lossy(kv.key());
                     tracing::warn!(key = %key, error = %e, "skipping undecodable node at boot");
-                    last_seen.insert(key.into_owned(), Instant::now());
+                    continue;
                 }
+            };
+            if node.status == NodeStatus::NotReady as i32 {
+                continue;
+            }
+            node.status = NodeStatus::NotReady as i32;
+            if let Err(e) = client
+                .clone()
+                .put(node_etcd_key(&node.name), node.encode_to_vec(), None)
+                .await
+            {
+                tracing::warn!(node = %node.name, error = %e, "failed to reset node at boot");
             }
         }
         Ok(())
@@ -413,16 +414,56 @@ impl Store {
             }
         };
 
-        self.node_last_seen
-            .write()
-            .await
-            .insert(node.name.clone(), Instant::now());
-
         self.publish_node_event(WatchNodeEvent {
             event_type: event_type as i32,
             node: Some(node),
         });
         Ok(())
+    }
+
+    /// Sets the node's status and publishes the resulting MODIFIED event. Returns
+    /// `false` if no node exists by that name, or if it already had that status, so a
+    /// reconnecting agent doesn't republish an event that says nothing changed.
+    ///
+    /// Takes the same `node_op_lock` as registration, since both are a read-modify-write
+    /// on one node and would otherwise interleave.
+    pub async fn set_node_status(
+        &self,
+        name: &str,
+        status: NodeStatus,
+    ) -> Result<bool, StoreError> {
+        let node = if let Some(ref client) = self.client {
+            let _guard = self.node_op_lock.lock().await;
+            let key = node_etcd_key(name);
+            let resp = client.clone().get(key.clone(), None).await?;
+            let Some(kv) = resp.kvs().first() else {
+                return Ok(false);
+            };
+            let mut node =
+                Node::decode(kv.value()).map_err(|e| StoreError::Decode(e.to_string()))?;
+            if node.status == status as i32 {
+                return Ok(false);
+            }
+            node.status = status as i32;
+            client.clone().put(key, node.encode_to_vec(), None).await?;
+            node
+        } else {
+            let mut nodes = self.nodes.write().await;
+            let Some(node) = nodes.get_mut(name) else {
+                return Ok(false);
+            };
+            if node.status == status as i32 {
+                return Ok(false);
+            }
+            node.status = status as i32;
+            node.clone()
+        };
+
+        self.publish_node_event(WatchNodeEvent {
+            event_type: EventType::Modified as i32,
+            node: Some(node),
+        });
+        Ok(true)
     }
 
     pub async fn get_node(&self, name: &str) -> Result<Option<Node>, StoreError> {
@@ -468,68 +509,6 @@ impl Store {
 
     /// Marks any node that hasn't reported a heartbeat within `timeout` as NOT_READY,
     /// publishing a node MODIFIED event for each newly-stale node. Returns their names.
-    pub async fn sweep_stale_nodes(&self, timeout: Duration) -> Vec<String> {
-        let now = Instant::now();
-        let stale_names: Vec<String> = {
-            let last_seen = self.node_last_seen.read().await;
-            last_seen
-                .iter()
-                .filter(|(_, seen)| now.saturating_duration_since(**seen) >= timeout)
-                .map(|(name, _)| name.clone())
-                .collect()
-        };
-
-        let mut newly_stale = Vec::new();
-
-        if let Some(ref client) = self.client {
-            let _guard = self.node_op_lock.lock().await;
-            for name in &stale_names {
-                let key = node_etcd_key(name);
-                let resp = match client.clone().get(key.clone(), None).await {
-                    Ok(resp) => resp,
-                    Err(e) => {
-                        tracing::warn!(%name, %e, "sweep: failed to read node from etcd");
-                        continue;
-                    }
-                };
-                let Some(kv) = resp.kvs().first() else {
-                    continue;
-                };
-                let Ok(mut node) = Node::decode(kv.value()) else {
-                    continue;
-                };
-                if node.status == NodeStatus::NotReady as i32 {
-                    continue;
-                }
-                node.status = NodeStatus::NotReady as i32;
-                if let Err(e) = client.clone().put(key, node.encode_to_vec(), None).await {
-                    tracing::warn!(%name, %e, "sweep: failed to write node to etcd");
-                    continue;
-                }
-                newly_stale.push(node);
-            }
-        } else {
-            let mut nodes = self.nodes.write().await;
-            for name in &stale_names {
-                if let Some(node) = nodes.get_mut(name)
-                    && node.status != NodeStatus::NotReady as i32
-                {
-                    node.status = NodeStatus::NotReady as i32;
-                    newly_stale.push(node.clone());
-                }
-            }
-        }
-
-        for node in &newly_stale {
-            self.publish_node_event(WatchNodeEvent {
-                event_type: EventType::Modified as i32,
-                node: Some(node.clone()),
-            });
-        }
-
-        newly_stale.into_iter().map(|node| node.name).collect()
-    }
-
     // Publish is fire-and-forget: a `send` error just means nobody is subscribed yet,
     // which isn't a failure condition for an event that nobody asked to watch.
     pub fn publish_pod_event(&self, event: WatchPodEvent) {
@@ -803,6 +782,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_set_node_status_publishes_modified() {
+        let store = Store::new();
+        store
+            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
+            .await
+            .unwrap();
+        let mut events = store.subscribe_node_events();
+
+        assert!(
+            store
+                .set_node_status("node-1", NodeStatus::NotReady)
+                .await
+                .unwrap()
+        );
+
+        let event = events.try_recv().expect("a node event should be published");
+        assert_eq!(event.event_type, EventType::Modified as i32);
+        assert_eq!(event.node.unwrap().status, NodeStatus::NotReady as i32);
+    }
+
+    #[tokio::test]
+    async fn test_set_node_status_is_a_noop_when_unchanged() {
+        let store = Store::new();
+        store
+            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
+            .await
+            .unwrap();
+        let mut events = store.subscribe_node_events();
+
+        assert!(
+            !store
+                .set_node_status("node-1", NodeStatus::Ready)
+                .await
+                .unwrap()
+        );
+        assert!(
+            events.try_recv().is_err(),
+            "an unchanged status must not publish an event"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_set_node_status_unknown_node_is_a_noop() {
+        let store = Store::new();
+        assert!(
+            !store
+                .set_node_status("ghost", NodeStatus::NotReady)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
     async fn test_upsert_node_replaces_existing() {
         let store = Store::new();
         let mut events = store.subscribe_node_events();
@@ -919,94 +951,6 @@ mod tests {
         assert!(
             node_b.try_recv().is_err(),
             "node-b should not receive an event published to node-a"
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_sweep_stale_nodes_marks_unresponsive_node_not_ready() {
-        let store = Store::new();
-        store
-            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
-            .await
-            .unwrap();
-        let mut events = store.subscribe_node_events();
-
-        tokio::time::advance(NODE_STALE_TIMEOUT + Duration::from_secs(1)).await;
-        let stale = store.sweep_stale_nodes(NODE_STALE_TIMEOUT).await;
-
-        assert_eq!(stale, vec!["node-1".to_string()]);
-        let node = store.get_node("node-1").await.unwrap().unwrap();
-        assert_eq!(node.status, NodeStatus::NotReady as i32);
-        let event = events
-            .try_recv()
-            .expect("a node MODIFIED event should have been published");
-        assert_eq!(event.event_type, EventType::Modified as i32);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_sweep_stale_nodes_marks_node_stale_at_exact_timeout() {
-        let store = Store::new();
-        store
-            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
-            .await
-            .unwrap();
-
-        tokio::time::advance(NODE_STALE_TIMEOUT).await;
-        let stale = store.sweep_stale_nodes(NODE_STALE_TIMEOUT).await;
-
-        assert_eq!(stale, vec!["node-1".to_string()]);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_sweep_stale_nodes_leaves_fresh_node_untouched() {
-        let store = Store::new();
-        store
-            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
-            .await
-            .unwrap();
-
-        tokio::time::advance(Duration::from_secs(1)).await;
-        let stale = store.sweep_stale_nodes(NODE_STALE_TIMEOUT).await;
-
-        assert!(stale.is_empty());
-        let node = store.get_node("node-1").await.unwrap().unwrap();
-        assert_eq!(node.status, NodeStatus::Ready as i32);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_upsert_and_publish_node_refreshes_liveness() {
-        let store = Store::new();
-        store
-            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
-            .await
-            .unwrap();
-
-        tokio::time::advance(NODE_STALE_TIMEOUT - Duration::from_secs(1)).await;
-        store
-            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
-            .await
-            .unwrap(); // heartbeat
-
-        tokio::time::advance(NODE_STALE_TIMEOUT - Duration::from_secs(1)).await;
-        let stale = store.sweep_stale_nodes(NODE_STALE_TIMEOUT).await;
-
-        assert!(stale.is_empty(), "recent heartbeat should keep node fresh");
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_sweep_stale_nodes_does_not_report_already_not_ready_node() {
-        let store = Store::new();
-        store
-            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::NotReady))
-            .await
-            .unwrap();
-
-        tokio::time::advance(NODE_STALE_TIMEOUT + Duration::from_secs(1)).await;
-        let stale = store.sweep_stale_nodes(NODE_STALE_TIMEOUT).await;
-
-        assert!(
-            stale.is_empty(),
-            "already-NotReady node shouldn't be reported as newly stale"
         );
     }
 }

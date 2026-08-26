@@ -1,5 +1,6 @@
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use proto::api::v1::api_server_server::ApiServer;
 use proto::api::v1::{
@@ -10,6 +11,7 @@ use proto::api::v1::{
     UpdatePodStatusResponse, WatchDesiredStateEvent, WatchDesiredStateRequest, WatchNodeEvent,
     WatchNodesRequest, WatchPodEvent, WatchPodsRequest,
 };
+use proto::shared::v1::NodeStatus;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
@@ -49,6 +51,54 @@ where
             ))
         })
     }))
+}
+
+/// Wraps an agent's desired-state stream so the node is marked NOT_READY once that
+/// stream ends. A dead node can't report its own death, so its silence is the signal.
+pub(crate) struct NodeLivenessGuard<S> {
+    inner: S,
+    store: Arc<Store>,
+    node_name: String,
+}
+
+impl<S> NodeLivenessGuard<S> {
+    pub(crate) fn new(inner: S, store: Arc<Store>, node_name: String) -> Self {
+        Self {
+            inner,
+            store,
+            node_name,
+        }
+    }
+}
+
+impl<S: Stream + Unpin> Stream for NodeLivenessGuard<S> {
+    type Item = S::Item;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<S::Item>> {
+        Pin::new(&mut self.get_mut().inner).poll_next(cx)
+    }
+}
+
+impl<S> Drop for NodeLivenessGuard<S> {
+    fn drop(&mut self) {
+        // Drop can't await, so hand the status write to the runtime. Nothing can be
+        // returned from here, so a failure is logged rather than swallowed: silently
+        // losing this leaves a node that is gone still advertised as READY.
+        let store = self.store.clone();
+        let node_name = std::mem::take(&mut self.node_name);
+        tokio::spawn(async move {
+            if let Err(e) = store
+                .set_node_status(&node_name, NodeStatus::NotReady)
+                .await
+            {
+                tracing::warn!(
+                    node = %node_name,
+                    error = ?e,
+                    "failed to mark node NotReady after its watch ended"
+                );
+            }
+        });
+    }
 }
 
 // `allow(dead_code)` is temporary: no handler reads `self.store` yet since they're all `todo!()`
