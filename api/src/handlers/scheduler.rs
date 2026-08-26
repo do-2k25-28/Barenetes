@@ -56,7 +56,8 @@ impl ApiService {
                         detail.unschedulable_reason = None;
                         placed = detail.core.clone();
                     })
-                    .await;
+                    .await
+                    .map_err(|e| e.to_status())?;
                 if !found {
                     return Err(crate::errors::pod_not_found(&namespace, &name));
                 }
@@ -78,7 +79,8 @@ impl ApiService {
                     .update_and_publish_pod(&namespace, &name, EventType::Modified, |detail| {
                         detail.unschedulable_reason = Some(reason);
                     })
-                    .await;
+                    .await
+                    .map_err(|e| e.to_status())?;
                 if !found {
                     return Err(crate::errors::pod_not_found(&namespace, &name));
                 }
@@ -184,11 +186,13 @@ mod tests {
         service
             .store
             .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
-            .await;
+            .await
+            .unwrap();
         service
             .store
             .upsert_and_publish_node(test_support::node("node-1", NodeStatus::NotReady))
-            .await;
+            .await
+            .unwrap();
 
         let first = stream.next().await.unwrap().unwrap();
         let second = stream.next().await.unwrap().unwrap();
@@ -204,7 +208,8 @@ mod tests {
         service
             .store
             .upsert_pod(test_support::pod_detail("default", "my-pod"))
-            .await;
+            .await
+            .unwrap();
 
         // Subscribe first: an unwatched node's desired-state events are dropped.
         let mut desired = service.store.subscribe_desired_state_events("node-a").await;
@@ -215,7 +220,12 @@ mod tests {
             .await
             .expect("assignment should succeed");
 
-        let stored = service.store.get_pod("default", "my-pod").await.unwrap();
+        let stored = service
+            .store
+            .get_pod("default", "my-pod")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(stored.node_name, "node-a");
 
         let pod_event = pod_events
@@ -236,7 +246,8 @@ mod tests {
         service
             .store
             .upsert_pod(test_support::pod_detail("default", "my-pod"))
-            .await;
+            .await
+            .unwrap();
         let mut pod_events = service.store.subscribe_pod_events();
 
         service
@@ -248,7 +259,12 @@ mod tests {
             .await
             .expect("an unschedulable outcome should still be accepted");
 
-        let stored = service.store.get_pod("default", "my-pod").await.unwrap();
+        let stored = service
+            .store
+            .get_pod("default", "my-pod")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(
             stored.unschedulable_reason.as_deref(),
             Some("no node with enough memory")
@@ -266,14 +282,19 @@ mod tests {
         let service = test_support::service();
         let mut pod = test_support::pod_detail("default", "my-pod");
         pod.unschedulable_reason = Some("no fit".to_string());
-        service.store.upsert_pod(pod).await;
+        service.store.upsert_pod(pod).await.unwrap();
 
         service
             .assign_pod_impl(assign_request("default", "my-pod", placed_on("node-a")))
             .await
             .unwrap();
 
-        let stored = service.store.get_pod("default", "my-pod").await.unwrap();
+        let stored = service
+            .store
+            .get_pod("default", "my-pod")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(stored.unschedulable_reason, None);
         assert_eq!(stored.node_name, "node-a");
     }
@@ -299,7 +320,8 @@ mod tests {
         service
             .store
             .upsert_pod(test_support::pod_detail("default", "my-pod"))
-            .await;
+            .await
+            .unwrap();
 
         let err = service
             .assign_pod_impl(assign_request("default", "my-pod", None))

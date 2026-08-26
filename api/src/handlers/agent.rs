@@ -68,7 +68,8 @@ impl ApiService {
                     detail.resource_usage = resource_usage;
                 }
             })
-            .await;
+            .await
+            .map_err(|e| e.to_status())?;
         if !found {
             return Err(crate::errors::pod_not_found(
                 &spec.namespace,
@@ -91,7 +92,10 @@ impl ApiService {
             return Err(Status::invalid_argument("missing node name"));
         }
 
-        self.store.upsert_and_publish_node(node).await;
+        self.store
+            .upsert_and_publish_node(node)
+            .await
+            .map_err(|e| e.to_status())?;
 
         Ok(Response::new(UpdateNodeStatusResponse {}))
     }
@@ -110,7 +114,8 @@ impl ApiService {
         let (assigned, receiver) = self
             .store
             .subscribe_desired_state_with_snapshot(&node_name)
-            .await;
+            .await
+            .map_err(|e| e.to_status())?;
 
         let snapshot = assigned.into_iter().map(|pod| {
             Ok(WatchDesiredStateEvent {
@@ -180,7 +185,8 @@ mod tests {
         service
             .store
             .upsert_pod(test_support::pod_detail("default", "web"))
-            .await;
+            .await
+            .unwrap();
         let mut events = service.store.subscribe_pod_events();
 
         let response = service
@@ -190,7 +196,12 @@ mod tests {
 
         assert_eq!(response.get_ref(), &UpdatePodStatusResponse {});
 
-        let pod = service.store.get_pod("default", "web").await.unwrap();
+        let pod = service
+            .store
+            .get_pod("default", "web")
+            .await
+            .unwrap()
+            .unwrap();
         let core_pod = pod
             .core
             .as_ref()
@@ -229,14 +240,19 @@ mod tests {
                 memory: 64,
             });
         }
-        service.store.upsert_pod(seed).await;
+        service.store.upsert_pod(seed).await.unwrap();
 
         service
             .update_pod_status_impl(update_request("default", "web"))
             .await
             .unwrap();
 
-        let pod = service.store.get_pod("default", "web").await.unwrap();
+        let pod = service
+            .store
+            .get_pod("default", "web")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(pod.node_name, "node-a");
         assert_eq!(pod.unschedulable_reason.as_deref(), Some("no node fits"));
         let core_pod = pod
@@ -343,7 +359,12 @@ mod tests {
         assert_eq!(event.event_type, EventType::Modified as i32);
         assert_eq!(event.node, Some(node("node-1", NodeStatus::NotReady)));
         assert_eq!(
-            service.store.get_node("node-1").await.map(|n| n.status),
+            service
+                .store
+                .get_node("node-1")
+                .await
+                .unwrap()
+                .map(|n| n.status),
             Some(NodeStatus::NotReady as i32)
         );
     }
@@ -467,8 +488,8 @@ mod tests {
         let service = test_support::service();
         let first_pod = assigned_pod("default", "pod-a", "node-a");
         let second_pod = assigned_pod("default", "pod-b", "node-a");
-        service.store.upsert_pod(first_pod.clone()).await;
-        service.store.upsert_pod(second_pod.clone()).await;
+        service.store.upsert_pod(first_pod.clone()).await.unwrap();
+        service.store.upsert_pod(second_pod.clone()).await.unwrap();
 
         let mut stream = service
             .watch_desired_state_impl(watch_desired_state_request("node-a"))
@@ -492,16 +513,19 @@ mod tests {
         service
             .store
             .upsert_pod(assigned_pod("default", "mine", "node-a"))
-            .await;
+            .await
+            .unwrap();
         service
             .store
             .upsert_pod(assigned_pod("default", "theirs", "node-b"))
-            .await;
+            .await
+            .unwrap();
         // An unscheduled pod belongs to no node's desired set.
         service
             .store
             .upsert_pod(test_support::pod_detail("default", "pending"))
-            .await;
+            .await
+            .unwrap();
 
         let mut stream = service
             .watch_desired_state_impl(watch_desired_state_request("node-a"))
@@ -529,7 +553,8 @@ mod tests {
         service
             .store
             .upsert_pod(assigned_pod("default", "pod-a", "node-a"))
-            .await;
+            .await
+            .unwrap();
 
         let mut stream = service
             .watch_desired_state_impl(watch_desired_state_request("node-a"))
