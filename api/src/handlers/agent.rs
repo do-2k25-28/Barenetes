@@ -85,12 +85,28 @@ impl ApiService {
         request: Request<UpdateNodeStatusRequest>,
     ) -> Result<Response<UpdateNodeStatusResponse>, Status> {
         let req = request.into_inner();
-        let node = req
+        let mut node = req
             .node
             .ok_or_else(|| crate::errors::missing_node("<unknown>"))?;
         if node.name.is_empty() {
             return Err(Status::invalid_argument("missing node name"));
         }
+
+        // The agent owns capacity and allocatable, which only it can observe. Status is
+        // liveness, which the API derives from whether a desired-state stream is open, so
+        // whatever the agent reported here is discarded. READY is the proto3 default, so
+        // trusting it would let an unset field mark a node alive with no stream at all.
+        node.status = match self
+            .store
+            .get_node(&node.name)
+            .await
+            .map_err(|e| e.to_status())?
+        {
+            Some(known) => known.status,
+            // A node registering for the first time has no stream yet; its own
+            // WatchDesiredState promotes it moments later.
+            None => proto::shared::v1::NodeStatus::NotReady as i32,
+        };
 
         self.store
             .upsert_and_publish_node(node)
@@ -106,6 +122,19 @@ impl ApiService {
     ) -> Result<Response<DesiredStateEventStream>, Status> {
         let node_name = request.into_inner().node_name;
         validate_dns1123_subdomain(&node_name, "node name")?;
+
+        // Rejected before the snapshot below, which scans every pod in the cluster: an
+        // unknown node shouldn't be able to cost a full keyspace read on its way to a
+        // NotFound.
+        if self
+            .store
+            .get_node(&node_name)
+            .await
+            .map_err(|e| e.to_status())?
+            .is_none()
+        {
+            return Err(crate::errors::node_not_found(&node_name));
+        }
 
         // Opening with the node's current desired set, closed by SYNCED, is what lets an
         // agent reconcile on connect instead of missing whatever was published while it
@@ -338,7 +367,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_update_node_status_first_seen_publishes_added() {
+    async fn test_update_node_status_first_seen_registers_not_ready() {
         let service = test_support::service();
         let mut events = service.store.subscribe_node_events();
 
@@ -351,7 +380,42 @@ mod tests {
             .try_recv()
             .expect("a first-seen node should publish an event");
         assert_eq!(event.event_type, EventType::Added as i32);
-        assert_eq!(event.node, Some(node("node-1", NodeStatus::Ready)));
+        assert_eq!(
+            event.node.map(|n| n.status),
+            Some(NodeStatus::NotReady as i32),
+            "a node with no stream open isn't alive, whatever it reported"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_node_status_cannot_change_liveness() {
+        let service = test_support::service();
+        service
+            .update_node_status_impl(update_node_status_request("node-1", NodeStatus::Ready))
+            .await
+            .unwrap();
+        // Stand in for the node's stream opening.
+        service
+            .store
+            .set_node_status("node-1", NodeStatus::Ready)
+            .await
+            .unwrap();
+
+        service
+            .update_node_status_impl(update_node_status_request("node-1", NodeStatus::NotReady))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            service
+                .store
+                .get_node("node-1")
+                .await
+                .unwrap()
+                .map(|n| n.status),
+            Some(NodeStatus::Ready as i32),
+            "an agent must not be able to declare itself down while its stream is open"
+        );
     }
 
     #[tokio::test]
@@ -374,16 +438,7 @@ mod tests {
             .try_recv()
             .expect("a known-node update should publish an event");
         assert_eq!(event.event_type, EventType::Modified as i32);
-        assert_eq!(event.node, Some(node("node-1", NodeStatus::NotReady)));
-        assert_eq!(
-            service
-                .store
-                .get_node("node-1")
-                .await
-                .unwrap()
-                .map(|n| n.status),
-            Some(NodeStatus::NotReady as i32)
-        );
+        assert_eq!(event.node.map(|n| n.name), Some("node-1".to_string()));
     }
 
     #[tokio::test]
@@ -409,6 +464,21 @@ mod tests {
 
         assert_eq!(err.code(), Code::InvalidArgument);
         assert_eq!(err.message(), "missing node name");
+    }
+
+    /// Waits for detached `Drop` teardowns to land. They run on the runtime, so tests
+    /// have to wait on the watcher count rather than assume a fixed number of yields.
+    async fn await_watchers(service: &ApiService, name: &str, expected: usize) {
+        for _ in 0..1_000 {
+            if service.store.watcher_count(name).await == expected {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+        panic!(
+            "watcher count for {name} never reached {expected} (still {})",
+            service.store.watcher_count(name).await
+        );
     }
 
     /// A node must exist before it can watch, so tests that open a stream register first.
@@ -523,8 +593,7 @@ mod tests {
         drop(stream);
 
         // Drop hands the write to the runtime, so let it run.
-        tokio::task::yield_now().await;
-        tokio::task::yield_now().await;
+        await_watchers(&service, "node-a", 0).await;
 
         let stored = service.store.get_node("node-a").await.unwrap().unwrap();
         assert_eq!(
@@ -550,8 +619,7 @@ mod tests {
             .unwrap()
             .into_inner();
         drop(stream);
-        tokio::task::yield_now().await;
-        tokio::task::yield_now().await;
+        await_watchers(&service, "node-a", 0).await;
 
         let event = node_events
             .try_recv()
@@ -597,8 +665,7 @@ mod tests {
             .unwrap()
             .into_inner();
 
-        tokio::task::yield_now().await;
-        tokio::task::yield_now().await;
+        await_watchers(&service, "node-a", 1).await;
 
         let stored = service.store.get_node("node-a").await.unwrap().unwrap();
         assert_eq!(
@@ -629,8 +696,7 @@ mod tests {
             .into_inner();
 
         drop(first);
-        tokio::task::yield_now().await;
-        tokio::task::yield_now().await;
+        await_watchers(&service, "node-a", 1).await;
         let stored = service.store.get_node("node-a").await.unwrap().unwrap();
         assert_eq!(
             stored.status,
@@ -639,8 +705,7 @@ mod tests {
         );
 
         drop(second);
-        tokio::task::yield_now().await;
-        tokio::task::yield_now().await;
+        await_watchers(&service, "node-a", 0).await;
         let stored = service.store.get_node("node-a").await.unwrap().unwrap();
         assert_eq!(stored.status, NodeStatus::NotReady as i32);
     }

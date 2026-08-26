@@ -8,6 +8,7 @@ mod test_support;
 mod validation;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use proto::api::v1::api_server_server::ApiServerServer;
 use tonic::transport::Server;
@@ -48,6 +49,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(%addr, "API server starting");
 
     Server::builder()
+        .http2_keepalive_interval(Some(Duration::from_secs(10)))
+        .http2_keepalive_timeout(Some(Duration::from_secs(20)))
         .add_service(ApiServerServer::new(api_service))
         .serve_with_shutdown(addr, shutdown_signal())
         .await?;

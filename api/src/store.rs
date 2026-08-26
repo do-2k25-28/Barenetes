@@ -124,7 +124,9 @@ impl Store {
                     continue;
                 }
             };
-            if node.status == NodeStatus::NotReady as i32 {
+            // Only liveness is reset. CORDON and DRAIN are an operator's decision and
+            // have nothing to do with whether the node's agent is connected.
+            if node.status != NodeStatus::Ready as i32 {
                 continue;
             }
             node.status = NodeStatus::NotReady as i32;
@@ -433,17 +435,31 @@ impl Store {
     ///
     /// The count guard is held across the status write so the two can't disagree.
     pub async fn node_watch_started(&self, name: &str) -> Result<bool, StoreError> {
-        let mut watchers = self.node_watchers.lock().await;
+        // Checked before taking the lock so an unknown node doesn't queue behind every
+        // other connect in the cluster. The count below is still the authority.
         if self.get_node(name).await?.is_none() {
             return Ok(false);
         }
 
-        let count = watchers.entry(name.to_string()).or_insert(0);
-        *count += 1;
-        if *count == 1 {
+        let mut watchers = self.node_watchers.lock().await;
+        let current = watchers.get(name).copied().unwrap_or(0);
+        if current == 0 {
+            // A `false` here only means the status was already READY, which is the
+            // ordinary case; existence was settled above.
             self.set_node_status(name, NodeStatus::Ready).await?;
         }
+        watchers.insert(name.to_string(), current + 1);
         Ok(true)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn watcher_count(&self, name: &str) -> usize {
+        self.node_watchers
+            .lock()
+            .await
+            .get(name)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Records that a stream has closed, marking the node NOT_READY once the last one
@@ -472,8 +488,8 @@ impl Store {
     /// `false` if no node exists by that name, or if it already had that status, so a
     /// reconnecting agent doesn't republish an event that says nothing changed.
     ///
-    /// Takes the same `node_op_lock` as registration, since both are a read-modify-write
-    /// on one node and would otherwise interleave.
+    /// Serialised against registration on the same node: the etcd branch shares
+    /// `node_op_lock`, the in-memory branch shares the `nodes` write guard.
     pub async fn set_node_status(
         &self,
         name: &str,

@@ -85,9 +85,18 @@ impl<S> Drop for NodeLivenessGuard<S> {
         // counts watchers rather than flipping the node's status directly.
         let store = self.store.clone();
         let node_name = std::mem::take(&mut self.node_name);
-        tokio::spawn(async move {
-            store.node_watch_ended(&node_name).await;
-        });
+
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(async move {
+                    store.node_watch_ended(&node_name).await;
+                });
+            }
+            Err(_) => tracing::warn!(
+                node = %node_name,
+                "watch dropped outside a runtime; node liveness not updated"
+            ),
+        }
     }
 }
 
