@@ -51,6 +51,27 @@ pub(crate) fn run(program: &str, arguments: &[&str]) -> io::Result<()> {
     }
 }
 
+pub(crate) fn output(program: &str, arguments: &[&str]) -> io::Result<String> {
+    let mut command = Command::new(resolve(program)?);
+    command
+        .args(arguments)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null());
+    let output = command.output()?;
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "network command failed: {program} {}",
+            arguments.join(" ")
+        )));
+    }
+    String::from_utf8(output.stdout).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "network command output is invalid UTF-8",
+        )
+    })
+}
+
 pub(crate) fn resolve(program: &str) -> io::Result<PathBuf> {
     let variable = format!("BARENETES_{}_BIN", program.to_uppercase());
     if let Some(value) = std::env::var_os(&variable) {

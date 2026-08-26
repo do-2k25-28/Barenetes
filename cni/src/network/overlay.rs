@@ -9,17 +9,29 @@ const VXLAN: &str = "barenetes-vx";
 
 pub(crate) fn ensure_overlay() -> io::Result<()> {
     let remote_nodes = remote_nodes()?;
+    if remote_nodes.is_empty() {
+        return Ok(());
+    }
     let Some(local_ip) = parse_optional_ip("BARENETES_NODE_IP")? else {
-        return if remote_nodes.is_empty() {
-            Ok(())
-        } else {
-            Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "BARENETES_NODE_IP is required with remote nodes",
-            ))
-        };
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "BARENETES_NODE_IP is required with remote nodes",
+        ));
     };
-    if !system::succeeds(IP, &["link", "show", "dev", VXLAN])? {
+    if system::succeeds(IP, &["link", "show", "dev", VXLAN])? {
+        let details = system::output(IP, &["-d", "link", "show", "dev", VXLAN])?;
+        let expected_local = format!("local {local_ip}");
+        if !details.contains("vxlan id 42")
+            || !details.contains(&expected_local)
+            || !details.contains("dstport 4789")
+            || !details.contains("nolearning")
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "existing VXLAN has incompatible configuration",
+            ));
+        }
+    } else {
         system::run(
             IP,
             &[
@@ -46,7 +58,6 @@ pub(crate) fn ensure_overlay() -> io::Result<()> {
     system::run(IP, &["link", "set", "dev", VXLAN, "mtu", &mtu])?;
     system::run(IP, &["link", "set", "dev", VXLAN, "up"])?;
     system::run(BRIDGE, &["vlan", "add", "dev", VXLAN, "vid", "1-4094"])?;
-    system::run(BRIDGE, &["vlan", "del", "dev", VXLAN, "vid", "1"])?;
     // Learning is disabled; remove stale static destinations after a restart.
     system::run(BRIDGE, &["fdb", "flush", "dev", VXLAN])?;
     for remote in remote_nodes {

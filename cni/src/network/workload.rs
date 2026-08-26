@@ -49,6 +49,7 @@ pub(crate) fn add_workload_network(
                 &network.network_name,
             )?;
         } else {
+            super::firewall::add_mappings(&record.ip_address, &record.port_mappings)?;
             return Ok(record_to_network(&record));
         }
     }

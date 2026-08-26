@@ -54,11 +54,18 @@ impl StateStore {
     pub(crate) fn save(&self, record: &WorkloadRecord) -> io::Result<()> {
         std::fs::create_dir_all(&self.directory)?;
         std::fs::set_permissions(&self.directory, std::fs::Permissions::from_mode(0o700))?;
+        let bytes = serde_json::to_vec(record).map_err(io::Error::other)?;
+        if bytes.len() as u64 > MAX_STATE_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "workload state is too large",
+            ));
+        }
         let mut temporary = tempfile::NamedTempFile::new_in(&self.directory)?;
         temporary
             .as_file()
             .set_permissions(std::fs::Permissions::from_mode(0o600))?;
-        serde_json::to_writer(&mut temporary, record).map_err(io::Error::other)?;
+        temporary.write_all(&bytes)?;
         temporary.flush()?;
         temporary.as_file().sync_all()?;
         temporary

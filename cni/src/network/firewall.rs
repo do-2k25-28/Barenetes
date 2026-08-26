@@ -35,19 +35,6 @@ pub(crate) fn ensure_egress() -> io::Result<()> {
     ])?;
     ensure_rule(&[
         "-t",
-        "nat",
-        "-C",
-        "POSTROUTING",
-        "-s",
-        "10.0.0.0/8",
-        "!",
-        "-o",
-        "barenetes0+",
-        "-j",
-        "MASQUERADE",
-    ])?;
-    ensure_rule(&[
-        "-t",
         "filter",
         "-C",
         FORWARD_CHAIN,
@@ -77,6 +64,28 @@ pub(crate) fn ensure_egress() -> io::Result<()> {
         TENANT_INTERFACES,
         "-j",
         "ACCEPT",
+    ])?;
+    // br_netfilter can report same-VLAN bridged traffic as barenetes0 ->
+    // barenetes0. Keep it allowed even when the global FORWARD policy is DROP.
+    ensure_rule(&[
+        "-t",
+        "filter",
+        "-C",
+        FORWARD_CHAIN,
+        "-i",
+        BRIDGE_NAME,
+        "-j",
+        "ACCEPT",
+    ])?;
+    ensure_rule(&[
+        "-t",
+        "filter",
+        "-C",
+        FORWARD_CHAIN,
+        "-o",
+        BRIDGE_NAME,
+        "-j",
+        "ACCEPT",
     ])
 }
 
@@ -90,9 +99,27 @@ fn ensure_chain(table: &str, chain: &str) -> io::Result<()> {
 // Inserted first so that a DROP policy or another tool's rules cannot shadow it.
 fn ensure_jump(table: &str, parent: &str, chain: &str) -> io::Result<()> {
     if succeeds(IPTABLES, &["-t", table, "-C", parent, "-j", chain])? {
-        return Ok(());
+        let delete = vec!["-t", table, "-D", parent, "-j", chain];
+        run(IPTABLES, &delete)?;
     }
     run(IPTABLES, &["-t", table, "-I", parent, "1", "-j", chain])
+}
+
+pub(crate) fn ensure_tenant_nat(vlan: u8, node: u8) -> io::Result<()> {
+    let source = format!("10.{vlan}.{node}.0/24");
+    ensure_rule(&[
+        "-t",
+        "nat",
+        "-C",
+        "POSTROUTING",
+        "-s",
+        &source,
+        "!",
+        "-o",
+        "barenetes0+",
+        "-j",
+        "MASQUERADE",
+    ])
 }
 
 pub(crate) fn validate_mappings(mappings: &[Port]) -> io::Result<()> {

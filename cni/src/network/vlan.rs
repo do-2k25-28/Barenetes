@@ -55,5 +55,6 @@ pub(crate) fn ensure(vlan: u8, node: u8) -> io::Result<Ipv4Addr> {
     let interface_mtu = mtu()?.to_string();
     run(IP, &["link", "set", "dev", &name, "mtu", &interface_mtu])?;
     run(IP, &["link", "set", "dev", &name, "up"])?;
+    super::firewall::ensure_tenant_nat(vlan, node)?;
     Ok(gateway)
 }
