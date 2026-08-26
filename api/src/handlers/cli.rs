@@ -647,7 +647,7 @@ mod tests {
         // create_pod never assigns a node, so seed a scheduled pod directly.
         let mut scheduled = test_support::pod_detail("default", "my-pod");
         scheduled.node_name = "node-a".to_string();
-        service.store.upsert_pod(scheduled.clone()).await;
+        service.store.upsert_pod(scheduled.clone()).await.unwrap();
 
         let mut desired_state_events = service.store.subscribe_desired_state_events("node-a").await;
 
@@ -668,7 +668,7 @@ mod tests {
         let service = service();
         let mut scheduled = test_support::pod_detail("default", "my-pod");
         scheduled.node_name = "node-a".to_string();
-        service.store.upsert_pod(scheduled).await;
+        service.store.upsert_pod(scheduled).await.unwrap();
 
         let mut other_node = service.store.subscribe_desired_state_events("node-b").await;
 

@@ -186,11 +186,13 @@ mod tests {
         service
             .store
             .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
-            .await;
+            .await
+            .unwrap();
         service
             .store
             .upsert_and_publish_node(test_support::node("node-1", NodeStatus::NotReady))
-            .await;
+            .await
+            .unwrap();
 
         let first = stream.next().await.unwrap().unwrap();
         let second = stream.next().await.unwrap().unwrap();
@@ -206,7 +208,8 @@ mod tests {
         service
             .store
             .upsert_pod(test_support::pod_detail("default", "my-pod"))
-            .await;
+            .await
+            .unwrap();
 
         // Subscribe first: an unwatched node's desired-state events are dropped.
         let mut desired = service.store.subscribe_desired_state_events("node-a").await;
@@ -243,7 +246,8 @@ mod tests {
         service
             .store
             .upsert_pod(test_support::pod_detail("default", "my-pod"))
-            .await;
+            .await
+            .unwrap();
         let mut pod_events = service.store.subscribe_pod_events();
 
         service
@@ -278,7 +282,7 @@ mod tests {
         let service = test_support::service();
         let mut pod = test_support::pod_detail("default", "my-pod");
         pod.unschedulable_reason = Some("no fit".to_string());
-        service.store.upsert_pod(pod).await;
+        service.store.upsert_pod(pod).await.unwrap();
 
         service
             .assign_pod_impl(assign_request("default", "my-pod", placed_on("node-a")))
@@ -316,7 +320,8 @@ mod tests {
         service
             .store
             .upsert_pod(test_support::pod_detail("default", "my-pod"))
-            .await;
+            .await
+            .unwrap();
 
         let err = service
             .assign_pod_impl(assign_request("default", "my-pod", None))

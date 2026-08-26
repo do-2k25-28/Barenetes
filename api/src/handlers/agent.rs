@@ -488,8 +488,8 @@ mod tests {
         let service = test_support::service();
         let first_pod = assigned_pod("default", "pod-a", "node-a");
         let second_pod = assigned_pod("default", "pod-b", "node-a");
-        service.store.upsert_pod(first_pod.clone()).await;
-        service.store.upsert_pod(second_pod.clone()).await;
+        service.store.upsert_pod(first_pod.clone()).await.unwrap();
+        service.store.upsert_pod(second_pod.clone()).await.unwrap();
 
         let mut stream = service
             .watch_desired_state_impl(watch_desired_state_request("node-a"))
@@ -513,16 +513,19 @@ mod tests {
         service
             .store
             .upsert_pod(assigned_pod("default", "mine", "node-a"))
-            .await;
+            .await
+            .unwrap();
         service
             .store
             .upsert_pod(assigned_pod("default", "theirs", "node-b"))
-            .await;
+            .await
+            .unwrap();
         // An unscheduled pod belongs to no node's desired set.
         service
             .store
             .upsert_pod(test_support::pod_detail("default", "pending"))
-            .await;
+            .await
+            .unwrap();
 
         let mut stream = service
             .watch_desired_state_impl(watch_desired_state_request("node-a"))
@@ -550,7 +553,8 @@ mod tests {
         service
             .store
             .upsert_pod(assigned_pod("default", "pod-a", "node-a"))
-            .await;
+            .await
+            .unwrap();
 
         let mut stream = service
             .watch_desired_state_impl(watch_desired_state_request("node-a"))

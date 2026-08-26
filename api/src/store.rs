@@ -743,7 +743,8 @@ mod tests {
         let store = Store::new();
         store
             .upsert_pod(test_support::pod_detail("default", "my-pod"))
-            .await;
+            .await
+            .unwrap();
         let mut events = store.subscribe_pod_events();
 
         let found = store
