@@ -66,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some("get-node" | "get-pod" | "delete-pod") => args.len() >= 2,
         Some("create-pod") => args.len() >= 3,
         Some("update-pod-status") => args.len() >= 4,
-        Some("assign-pod") => args.len() >= 4,
+        Some("assign-pod") => args.len() >= 5,
         Some("update-node-status") => args.len() >= 5,
         _ => true,
     };
@@ -92,8 +92,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(2);
     }
 
-    // Reject a flag in the pod-name position for create-pod.
-    if sub == Some("create-pod") && args[1].starts_with("--") {
+    // Reject a flag in the pod-name position for create-pod, delete-pod, get-pod.
+    if matches!(sub, Some("create-pod" | "delete-pod" | "get-pod")) && args[1].starts_with("--") {
         eprintln!("error: pod name must not be a flag");
         std::process::exit(2);
     }
