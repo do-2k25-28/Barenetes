@@ -114,7 +114,8 @@ impl ApiService {
         let (assigned, receiver) = self
             .store
             .subscribe_desired_state_with_snapshot(&node_name)
-            .await;
+            .await
+            .map_err(|e| e.to_status())?;
 
         let snapshot = assigned.into_iter().map(|pod| {
             Ok(WatchDesiredStateEvent {

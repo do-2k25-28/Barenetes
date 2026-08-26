@@ -92,6 +92,7 @@ impl ApiService {
             .store
             .remove_pod(&req.namespace, &req.name)
             .await
+            .map_err(|e| e.to_status())?
             .ok_or_else(|| crate::errors::pod_not_found(&req.namespace, &req.name))?;
 
         if !pod.node_name.is_empty() {
@@ -580,7 +581,7 @@ mod tests {
             .into_inner();
 
         assert_eq!(response.name, "my-pod");
-        assert_eq!(service.store.get_pod("default", "my-pod").await, None);
+        assert_eq!(service.store.get_pod("default", "my-pod").await.unwrap(), None);
     }
 
     #[tokio::test]

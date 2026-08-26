@@ -238,18 +238,43 @@ impl Store {
         }
     }
 
-    /// Removes the pod by (namespace, name) and publishes a DELETED event under the same
-    /// write-lock guard, so a watcher can never observe the removal without the event, nor
-    /// see it out of order against a recreation of the same key. Returns the removed pod,
-    /// or `None` (publishing nothing) if no pod exists for that key.
-    pub async fn remove_pod(&self, namespace: &str, name: &str) -> Option<PodDetail> {
-        let mut pods = self.pods.write().await;
-        let pod = pods.remove(&(namespace.to_string(), name.to_string()))?;
-        self.publish_pod_event(WatchPodEvent {
-            event_type: EventType::Deleted as i32,
-            pod: Some(pod.clone()),
-        });
-        Some(pod)
+    /// Removes the pod by (namespace, name) and publishes a DELETED event.
+    /// Returns the removed pod, or `None` if no pod exists for that key.
+    pub async fn remove_pod(
+        &self,
+        namespace: &str,
+        name: &str,
+    ) -> Result<Option<PodDetail>, StoreError> {
+        if let Some(ref client) = self.client {
+            let key = pod_etcd_key(namespace, name);
+            let resp = client.clone().get(key.clone(), None).await?;
+            let old = resp.kvs().first().and_then(|kv| {
+                PodDetail::decode(kv.value())
+                    .map_err(|e| {
+                        let etcd_key = String::from_utf8_lossy(kv.key());
+                        tracing::warn!(key = %etcd_key, error = %e, "skipping undecodable pod for delete");
+                    })
+                    .ok()
+            });
+            let _ = client.clone().delete(key, None).await?;
+            if let Some(ref pod) = old {
+                self.publish_pod_event(WatchPodEvent {
+                    event_type: EventType::Deleted as i32,
+                    pod: Some(pod.clone()),
+                });
+            }
+            Ok(old)
+        } else {
+            let mut pods = self.pods.write().await;
+            let pod = pods.remove(&(namespace.to_string(), name.to_string()));
+            if let Some(ref p) = pod {
+                self.publish_pod_event(WatchPodEvent {
+                    event_type: EventType::Deleted as i32,
+                    pod: Some(p.clone()),
+                });
+            }
+            Ok(pod)
+        }
     }
 
     /// Looks up the pod by (namespace, name) and applies `mutate` to it, then
@@ -534,24 +559,48 @@ impl Store {
     }
 
     /// Snapshots the pods currently assigned to `node_name` and subscribes to its
-    /// desired-state channel under a single `pods` read guard, so no assignment or
-    /// deletion can slip between the two and be missed by the caller.
+    /// desired-state channel. In etcd mode, does a prefix scan; in-memory mode,
+    /// reads the pods HashMap directly.
     pub async fn subscribe_desired_state_with_snapshot(
         &self,
         node_name: &str,
-    ) -> (
-        Vec<PodWithSpec>,
-        broadcast::Receiver<WatchDesiredStateEvent>,
-    ) {
-        let pods = self.pods.read().await;
-        let assigned = pods
-            .values()
-            .filter(|pod| pod.node_name == node_name)
-            .filter_map(|pod| pod.core.clone())
-            .collect();
+    ) -> Result<
+        (
+            Vec<PodWithSpec>,
+            broadcast::Receiver<WatchDesiredStateEvent>,
+        ),
+        StoreError,
+    > {
+        let assigned = if let Some(ref client) = self.client {
+            let resp = client
+                .clone()
+                .get(
+                    pods_prefix(),
+                    Some(etcd_client::GetOptions::default().with_prefix()),
+                )
+                .await?;
+            resp.kvs()
+                .iter()
+                .filter_map(|kv| {
+                    PodDetail::decode(kv.value())
+                        .map_err(|e| {
+                            let key = String::from_utf8_lossy(kv.key());
+                            tracing::warn!(key = %key, error = %e, "skipping undecodable pod in desired-state snapshot");
+                        })
+                        .ok()
+                })
+                .filter(|pod| pod.node_name == node_name)
+                .filter_map(|pod| pod.core)
+                .collect()
+        } else {
+            let pods = self.pods.read().await;
+            pods.values()
+                .filter(|pod| pod.node_name == node_name)
+                .filter_map(|pod| pod.core.clone())
+                .collect()
+        };
         let receiver = self.subscribe_desired_state_events(node_name).await;
-
-        (assigned, receiver)
+        Ok((assigned, receiver))
     }
 
     /// Get-or-create the channel for `node_name` and subscribe to it, evicting channels
@@ -631,10 +680,11 @@ mod tests {
         let store = Store::new();
         store
             .upsert_pod(test_support::pod_detail("default", "my-pod"))
-            .await;
+            .await
+            .unwrap();
         let mut events = store.subscribe_pod_events();
 
-        let removed = store.remove_pod("default", "my-pod").await;
+        let removed = store.remove_pod("default", "my-pod").await.unwrap();
 
         assert!(removed.is_some());
         let event = events
@@ -649,7 +699,13 @@ mod tests {
         let store = Store::new();
         let mut events = store.subscribe_pod_events();
 
-        assert!(store.remove_pod("default", "ghost").await.is_none());
+        assert!(
+            store
+                .remove_pod("default", "ghost")
+                .await
+                .unwrap()
+                .is_none()
+        );
         assert!(
             events.try_recv().is_err(),
             "removing a pod that doesn't exist must publish nothing"
