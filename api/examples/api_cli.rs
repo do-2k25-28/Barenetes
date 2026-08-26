@@ -318,23 +318,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             // Collect --container name:STATE flags (repeatable).
-            let container_statuses: Vec<ContainerStatus> = args
+            let raw_containers: Vec<&String> = args
                 .windows(2)
                 .filter(|w| w[0] == "--container")
-                .filter_map(|w| {
-                    let (cname, state_str) = w[1].split_once(':')?;
-                    let state = match state_str {
-                        "ACTIVE" => State::Active,
-                        "CRASHED" => State::Crashed,
-                        "WAITING" => State::Waiting,
-                        _ => return None,
-                    };
-                    Some(ContainerStatus {
-                        name: cname.to_string(),
-                        state: state.into(),
-                    })
-                })
+                .map(|w| &w[1])
                 .collect();
+
+            let mut container_statuses = Vec::new();
+            for spec in &raw_containers {
+                let (cname, state_str) = spec
+                    .split_once(':')
+                    .ok_or_else(|| format!("--container: '{spec}' must be in name:STATE format"))?;
+                let state = match state_str {
+                    "ACTIVE" => State::Active,
+                    "CRASHED" => State::Crashed,
+                    "WAITING" => State::Waiting,
+                    other => {
+                        return Err(format!(
+                            "--container: unknown state '{other}' (expected ACTIVE|CRASHED|WAITING)"
+                        )
+                        .into());
+                    }
+                };
+                container_statuses.push(ContainerStatus {
+                    name: cname.to_string(),
+                    state: state.into(),
+                });
+            }
 
             client
                 .update_pod_status(UpdatePodStatusRequest {
