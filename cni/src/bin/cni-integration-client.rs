@@ -8,7 +8,7 @@ use std::env;
 use tokio::net::UnixStream;
 use tonic::transport::{Channel, Endpoint, Uri};
 
-const SOCKET: &str = "/run/barenetes/cni.sock";
+const DEFAULT_SOCKET: &str = "/run/barenetes/cni.sock";
 
 fn refs(instance: &str, network: &str, vlan: u32) -> (WorkloadRef, NetworkRef) {
     (
@@ -25,9 +25,11 @@ fn refs(instance: &str, network: &str, vlan: u32) -> (WorkloadRef, NetworkRef) {
 
 async fn client() -> Result<CniServiceClient<Channel>, Box<dyn std::error::Error>> {
     let endpoint = Endpoint::try_from("http://localhost")?;
+    let socket = env::var("BARENETES_CNI_SOCKET").unwrap_or_else(|_| DEFAULT_SOCKET.to_owned());
     let channel = endpoint
-        .connect_with_connector(tower::service_fn(|_: Uri| async {
-            UnixStream::connect(SOCKET).await.map(TokioIo::new)
+        .connect_with_connector(tower::service_fn(move |_: Uri| {
+            let socket = socket.clone();
+            async move { UnixStream::connect(socket).await.map(TokioIo::new) }
         }))
         .await?;
     Ok(CniServiceClient::new(channel))
