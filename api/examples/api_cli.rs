@@ -26,6 +26,19 @@ use proto::shared::v1::{
 
 const API: &str = "http://127.0.0.1:50052";
 
+fn find_numeric_flag(args: &[String], flag: &str) -> Result<Option<i32>, String> {
+    let pos = match args.iter().position(|a| a == flag) {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+    let val = args
+        .get(pos + 1)
+        .ok_or_else(|| format!("{flag} requires a value"))?;
+    val.parse::<i32>()
+        .map(Some)
+        .map_err(|_| format!("{flag}: '{val}' is not a valid integer"))
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -296,16 +309,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .position(|a| a == "--message")
                 .and_then(|i| args.get(i + 1))
                 .cloned();
-            let cpu = args
-                .iter()
-                .position(|a| a == "--cpu")
-                .and_then(|i| args.get(i + 1))
-                .and_then(|s| s.parse::<i32>().ok());
-            let memory = args
-                .iter()
-                .position(|a| a == "--memory")
-                .and_then(|i| args.get(i + 1))
-                .and_then(|s| s.parse::<i32>().ok());
+            let cpu = find_numeric_flag(&args, "--cpu")?;
+            let memory = find_numeric_flag(&args, "--memory")?;
 
             if cpu.is_some() != memory.is_some() {
                 eprintln!("--cpu and --memory must be provided together");
