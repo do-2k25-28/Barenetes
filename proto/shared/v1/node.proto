@@ -15,5 +15,5 @@ message Node {
   string name = 1;
   NodeStatus status = 2;
   Resources capacity = 3; // Total machine resources
-  Resources allocatable = 4; // Capacity - Sum limits of Pod
+  Resources allocatable = 4; // Resources currently free on the machine, as observed by the agent
 }
