@@ -581,7 +581,10 @@ mod tests {
             .into_inner();
 
         assert_eq!(response.name, "my-pod");
-        assert_eq!(service.store.get_pod("default", "my-pod").await.unwrap(), None);
+        assert_eq!(
+            service.store.get_pod("default", "my-pod").await.unwrap(),
+            None
+        );
     }
 
     #[tokio::test]
