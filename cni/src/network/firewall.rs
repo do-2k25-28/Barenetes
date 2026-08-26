@@ -14,11 +14,16 @@ const TENANT_INTERFACES: &str = "barenetes0.+";
 pub(crate) fn ensure_egress() -> io::Result<()> {
     run(SYSCTL, &["-q", "-w", "net.ipv4.ip_forward=1"])?;
     ensure_chain("nat", PREROUTING_CHAIN)?;
-    ensure_jump("nat", "PREROUTING", PREROUTING_CHAIN)?;
+    ensure_jump("nat", "PREROUTING", PREROUTING_CHAIN, &[])?;
     ensure_chain("nat", OUTPUT_CHAIN)?;
-    ensure_jump("nat", "OUTPUT", OUTPUT_CHAIN)?;
+    ensure_jump(
+        "nat",
+        "OUTPUT",
+        OUTPUT_CHAIN,
+        &["-m", "addrtype", "--dst-type", "LOCAL"],
+    )?;
     ensure_chain("filter", FORWARD_CHAIN)?;
-    ensure_jump("filter", "FORWARD", FORWARD_CHAIN)?;
+    ensure_jump("filter", "FORWARD", FORWARD_CHAIN, &[])?;
     // Routed traffic between tenant VLAN interfaces must never be allowed.
     // Same-VLAN traffic stays on the bridge and does not need this rule.
     ensure_rule_first(&[
@@ -97,12 +102,23 @@ fn ensure_chain(table: &str, chain: &str) -> io::Result<()> {
 }
 
 // Inserted first so that a DROP policy or another tool's rules cannot shadow it.
-fn ensure_jump(table: &str, parent: &str, chain: &str) -> io::Result<()> {
-    if succeeds(IPTABLES, &["-t", table, "-C", parent, "-j", chain])? {
-        let delete = vec!["-t", table, "-D", parent, "-j", chain];
+fn ensure_jump(table: &str, parent: &str, chain: &str, match_args: &[&str]) -> io::Result<()> {
+    let mut scoped_check = vec!["-t", table, "-C", parent];
+    scoped_check.extend_from_slice(match_args);
+    scoped_check.extend(["-j", chain]);
+    if succeeds(IPTABLES, &scoped_check)? {
+        let mut delete = scoped_check.clone();
+        delete[2] = "-D";
         run(IPTABLES, &delete)?;
     }
-    run(IPTABLES, &["-t", table, "-I", parent, "1", "-j", chain])
+    // Remove the pre-existing unscoped OUTPUT jump during upgrade.
+    if !match_args.is_empty() && succeeds(IPTABLES, &["-t", table, "-C", parent, "-j", chain])? {
+        run(IPTABLES, &["-t", table, "-D", parent, "-j", chain])?;
+    }
+    let mut insert = vec!["-t", table, "-I", parent, "1"];
+    insert.extend_from_slice(match_args);
+    insert.extend(["-j", chain]);
+    run(IPTABLES, &insert)
 }
 
 pub(crate) fn ensure_tenant_nat(vlan: u8, node: u8) -> io::Result<()> {
@@ -177,8 +193,9 @@ pub(crate) fn delete_mappings(address: &str, mappings: &[Port]) -> io::Result<()
     Ok(())
 }
 
-// PREROUTING handles traffic entering the node; OUTPUT handles traffic
-// generated locally, such as curl localhost:<port> on the node itself.
+// PREROUTING handles traffic entering the node; OUTPUT handles locally
+// generated connections addressed to a local node address. Loopback traffic
+// to 127.0.0.1 is intentionally not part of the published-port contract.
 fn mapping_rule(
     chain: &str,
     ingress: bool,
