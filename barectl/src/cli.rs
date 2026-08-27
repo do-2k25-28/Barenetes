@@ -32,15 +32,15 @@ pub enum Commands {
 #[derive(Args)]
 pub struct CreatePodArgs {
     /// Pod name (also used as the container name)
-    #[arg(long, value_parser = non_empty)]
+    #[arg(long)]
     pub name: String,
 
     /// Namespace to create the pod in
-    #[arg(long, default_value = "default", value_parser = non_empty)]
+    #[arg(long, default_value = "default")]
     pub namespace: String,
 
     /// Container image (OCI reference)
-    #[arg(long, value_parser = non_empty)]
+    #[arg(long)]
     pub image: String,
 
     /// Exposed port, format HOST:CONTAINER[/tcp|udp] (repeatable)
@@ -71,36 +71,27 @@ pub struct CreatePodArgs {
 #[derive(Args)]
 pub struct GetPodArgs {
     /// Pod name
-    #[arg(long, value_parser = non_empty)]
+    #[arg(long)]
     pub name: String,
 
     /// Namespace the pod is in
-    #[arg(long, default_value = "default", value_parser = non_empty)]
+    #[arg(long, default_value = "default")]
     pub namespace: String,
 }
 
 #[derive(Args)]
 pub struct ListPodsArgs {
     /// Only show the pod with this exact name
-    #[arg(long, value_parser = non_empty)]
+    #[arg(long)]
     pub name: Option<String>,
 
     /// Only show pods in this exact namespace
-    #[arg(long, value_parser = non_empty)]
+    #[arg(long)]
     pub namespace: Option<String>,
 
     /// Only show pods with a container running this exact image
-    #[arg(long, value_parser = non_empty)]
+    #[arg(long)]
     pub image: Option<String>,
-}
-
-/// Rejects an empty (or whitespace-only) value, so a mistake like `--name ""`
-/// fails immediately instead of round-tripping to the server first.
-fn non_empty(raw: &str) -> Result<String, String> {
-    if raw.trim().is_empty() {
-        return Err("value must not be empty".to_string());
-    }
-    Ok(raw.to_string())
 }
 
 fn parse_port(raw: &str) -> Result<Port, String> {
