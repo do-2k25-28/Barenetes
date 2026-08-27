@@ -28,15 +28,15 @@ pub enum Commands {
 #[derive(Args)]
 pub struct CreatePodArgs {
     /// Pod name (also used as the container name)
-    #[arg(long)]
+    #[arg(long, value_parser = non_empty)]
     pub name: String,
 
     /// Namespace to create the pod in
-    #[arg(long, default_value = "default")]
+    #[arg(long, default_value = "default", value_parser = non_empty)]
     pub namespace: String,
 
     /// Container image (OCI reference)
-    #[arg(long)]
+    #[arg(long, value_parser = non_empty)]
     pub image: String,
 
     /// Exposed port, format HOST:CONTAINER[/tcp|udp] (repeatable)
@@ -67,12 +67,21 @@ pub struct CreatePodArgs {
 #[derive(Args)]
 pub struct GetPodArgs {
     /// Pod name
-    #[arg(long)]
+    #[arg(long, value_parser = non_empty)]
     pub name: String,
 
     /// Namespace the pod is in
-    #[arg(long, default_value = "default")]
+    #[arg(long, default_value = "default", value_parser = non_empty)]
     pub namespace: String,
+}
+
+/// Rejects an empty (or whitespace-only) value, so a mistake like `--name ""`
+/// fails immediately instead of round-tripping to the server first.
+fn non_empty(raw: &str) -> Result<String, String> {
+    if raw.trim().is_empty() {
+        return Err("value must not be empty".to_string());
+    }
+    Ok(raw.to_string())
 }
 
 fn parse_port(raw: &str) -> Result<Port, String> {

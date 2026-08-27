@@ -1,4 +1,5 @@
 use thiserror::Error;
+use tonic::Code;
 
 #[derive(Debug, Error)]
 pub enum CliError {
@@ -8,6 +9,25 @@ pub enum CliError {
         source: tonic::transport::Error,
     },
 
-    #[error("{0}")]
-    Server(#[from] tonic::Status),
+    #[error("server returned no pod data for this request")]
+    EmptyResponse,
+
+    #[error("{message}")]
+    Server { message: String },
+}
+
+impl From<tonic::Status> for CliError {
+    fn from(status: tonic::Status) -> Self {
+        let hint = match status.code() {
+            Code::AlreadyExists => {
+                " (try a different --name/--namespace, or delete the existing pod first)"
+            }
+            Code::NotFound => " (check --name and --namespace, no such pod exists)",
+            Code::Unavailable => " (the server may be restarting, try again in a moment)",
+            _ => "",
+        };
+        CliError::Server {
+            message: format!("{}{hint}", status.message()),
+        }
+    }
 }

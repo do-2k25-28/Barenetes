@@ -68,8 +68,9 @@ pub async fn get_pod(server: &str, args: GetPodArgs) -> Result<(), CliError> {
         })
         .await?;
 
-    if let Some(pod) = response.into_inner().pod {
-        print_pod(&pod);
+    match response.into_inner().pod {
+        Some(pod) => print_pod(&pod),
+        None => return Err(CliError::EmptyResponse),
     }
 
     Ok(())
