@@ -26,7 +26,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    let store = Arc::new(Store::new());
+    let store = if let Ok(endpoints) = std::env::var("BARENETES_ETCD_ENDPOINTS") {
+        let endpoints: Vec<String> = endpoints
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .collect();
+        let client = etcd_client::Client::connect(&endpoints, None).await?;
+        tracing::info!(?endpoints, "connected to etcd");
+        let store = Arc::new(Store::new_with_etcd(client));
+        store.load_node_liveness().await?;
+        store
+    } else {
+        tracing::info!("running with in-memory store");
+        Arc::new(Store::new())
+    };
 
     let liveness_store = store.clone();
     tokio::spawn(async move {
