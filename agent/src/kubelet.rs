@@ -127,7 +127,7 @@ impl Kubelet for KubeletService {
             .pod
             .ok_or_else(|| Status::invalid_argument("missing pod"))?;
         let spec = pod.spec.unwrap_or_default();
-        let name = pod
+        let pod_name = pod
             .pod
             .map(|p| p.name)
             .filter(|name| !name.is_empty())
@@ -149,9 +149,14 @@ impl Kubelet for KubeletService {
 
         let namespace = match spec.namespace.is_empty() {
             true => DEFAULT_NAMESPACE,
-            false => spec.namespace.as_str(),
+            false => {
+                if spec.namespace.contains('.') {
+                    return Err(Status::invalid_argument("namespace must not contain '.'"));
+                }
+                spec.namespace.as_str()
+            }
         };
-        let pod_id = pod_id(namespace, &name);
+        let pod_id = pod_id(namespace, &pod_name);
 
         println!("Applying pod {pod_id}");
 
@@ -246,14 +251,14 @@ impl Kubelet for KubeletService {
 
 /// `DeletePodRequest` carries no namespace, only a `pod_id`, so the namespace is
 /// encoded into the id returned by `apply_pod` instead of travelling next to it.
-fn pod_id(namespace: &str, name: &str) -> String {
-    format!("{namespace}-{name}")
+fn pod_id(namespace: &str, pod_name: &str) -> String {
+    format!("{namespace}.{pod_name}")
 }
 
 /// Recovers the namespace encoded at the start of a pod id.
 fn namespace_of(pod_id: &str) -> &str {
     pod_id
-        .split_once('-')
+        .split_once('.')
         .map(|(namespace, _)| namespace)
         .unwrap_or(DEFAULT_NAMESPACE)
 }
