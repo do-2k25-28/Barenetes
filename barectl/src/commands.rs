@@ -1,13 +1,13 @@
-use proto::api::v1::CreatePodRequest;
 use proto::api::v1::api_server_client::ApiServerClient;
-use proto::shared::v1::{Container, Pod, PodSpec, PodStatus, PodWithSpec, Resources};
+use proto::api::v1::{CreatePodRequest, GetPodRequest, ListPodsRequest};
+use proto::shared::v1::{
+    Container, Pod, PodDetail, PodSpec, PodStatus, PodWithSpec, Protocol, Resources,
+};
 
-use crate::cli::CreatePodArgs;
+use crate::cli::{CreatePodArgs, GetPodArgs, ListPodsArgs};
+use crate::error::CliError;
 
-pub async fn create_pod(
-    server: &str,
-    args: CreatePodArgs,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn create_pod(server: &str, args: CreatePodArgs) -> Result<(), CliError> {
     let pod = PodWithSpec {
         pod: Some(Pod {
             name: args.name.clone(),
@@ -26,7 +26,12 @@ pub async fn create_pod(
         }),
     };
 
-    let mut client = ApiServerClient::connect(server.to_string()).await?;
+    let mut client = ApiServerClient::connect(server.to_string())
+        .await
+        .map_err(|source| CliError::Connect {
+            addr: server.to_string(),
+            source,
+        })?;
     client
         .create_pod(CreatePodRequest { pod: Some(pod) })
         .await?;
@@ -46,4 +51,213 @@ fn resources(cpu: Option<i32>, memory: Option<i32>) -> Option<Resources> {
         cpu: cpu.unwrap_or_default(),
         memory: memory.unwrap_or_default(),
     })
+}
+
+pub async fn get_pod(server: &str, args: GetPodArgs) -> Result<(), CliError> {
+    let mut client = ApiServerClient::connect(server.to_string())
+        .await
+        .map_err(|source| CliError::Connect {
+            addr: server.to_string(),
+            source,
+        })?;
+
+    let response = client
+        .get_pod(GetPodRequest {
+            name: args.name,
+            namespace: args.namespace,
+        })
+        .await?;
+
+    match response.into_inner().pod {
+        Some(pod) => print_pod(&pod),
+        None => return Err(CliError::EmptyResponse),
+    }
+
+    Ok(())
+}
+
+fn pod_name(pod: &PodDetail) -> &str {
+    pod.core
+        .as_ref()
+        .and_then(|c| c.pod.as_ref())
+        .map(|p| p.name.as_str())
+        .unwrap_or_default()
+}
+
+fn pod_namespace(pod: &PodDetail) -> &str {
+    pod.core
+        .as_ref()
+        .and_then(|c| c.spec.as_ref())
+        .map(|s| s.namespace.as_str())
+        .unwrap_or_default()
+}
+
+fn pod_status(pod: &PodDetail) -> PodStatus {
+    pod.core
+        .as_ref()
+        .and_then(|c| c.pod.as_ref())
+        .map(|p| PodStatus::try_from(p.status).unwrap_or(PodStatus::Unknown))
+        .unwrap_or(PodStatus::Unknown)
+}
+
+fn pod_containers(pod: &PodDetail) -> &[Container] {
+    pod.core
+        .as_ref()
+        .and_then(|c| c.spec.as_ref())
+        .map(|s| s.containers.as_slice())
+        .unwrap_or_default()
+}
+
+pub async fn list_pods(server: &str, args: ListPodsArgs) -> Result<(), CliError> {
+    let mut client = ApiServerClient::connect(server.to_string())
+        .await
+        .map_err(|source| CliError::Connect {
+            addr: server.to_string(),
+            source,
+        })?;
+
+    let response = client.list_pods(ListPodsRequest {}).await?;
+    let mut pods = response.into_inner().pods;
+
+    if pods.is_empty() {
+        println!("No pods found.");
+        return Ok(());
+    }
+
+    pods.retain(|pod| matches_filters(pod, &args));
+
+    if pods.is_empty() {
+        println!("No pods match the given filters.");
+        return Ok(());
+    }
+
+    pods.sort_by(|a, b| (pod_namespace(a), pod_name(a)).cmp(&(pod_namespace(b), pod_name(b))));
+
+    println!(
+        "{:<15} {:<12} {:<10} {:<15} IMAGE",
+        "NAME", "NAMESPACE", "STATUS", "NODE"
+    );
+    for pod in &pods {
+        let images = pod_containers(pod)
+            .iter()
+            .map(|c| c.image.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        let status = format!("{:?}", pod_status(pod));
+        println!(
+            "{:<15} {:<12} {:<10} {:<15} {}",
+            pod_name(pod),
+            pod_namespace(pod),
+            status,
+            or_none(&pod.node_name),
+            images
+        );
+    }
+
+    Ok(())
+}
+
+fn matches_filters(pod: &PodDetail, args: &ListPodsArgs) -> bool {
+    if let Some(name) = &args.name
+        && pod_name(pod) != name
+    {
+        return false;
+    }
+    if let Some(namespace) = &args.namespace
+        && pod_namespace(pod) != namespace
+    {
+        return false;
+    }
+    if let Some(image) = &args.image
+        && !pod_containers(pod).iter().any(|c| &c.image == image)
+    {
+        return false;
+    }
+    true
+}
+
+fn print_pod(pod: &PodDetail) {
+    let name = pod_name(pod);
+    let namespace = pod_namespace(pod);
+    let status = pod_status(pod);
+    let pod_ip = pod
+        .pod_ip
+        .as_deref()
+        .filter(|ip| !ip.is_empty())
+        .unwrap_or("<none>");
+
+    println!("Name:        {name}");
+    println!("Namespace:   {namespace}");
+    println!("Status:      {status:?}");
+    println!("Node:        {}", or_none(&pod.node_name));
+    println!("Pod IP:      {pod_ip}");
+
+    let requests = pod
+        .core
+        .as_ref()
+        .and_then(|c| c.pod.as_ref())
+        .and_then(|p| p.requests.as_ref());
+    let limits = pod
+        .core
+        .as_ref()
+        .and_then(|c| c.pod.as_ref())
+        .and_then(|p| p.limits.as_ref());
+    if requests.is_some() || limits.is_some() {
+        println!();
+        if let Some(requests) = requests {
+            println!(
+                "Requests:    cpu={}m, memory={}Mi",
+                requests.cpu, requests.memory
+            );
+        }
+        if let Some(limits) = limits {
+            println!(
+                "Limits:      cpu={}m, memory={}Mi",
+                limits.cpu, limits.memory
+            );
+        }
+    }
+
+    println!();
+    println!("Containers:");
+    for container in pod_containers(pod) {
+        println!("  - {} ({})", container.name, container.image);
+        if !container.ports.is_empty() {
+            let ports = container
+                .ports
+                .iter()
+                .map(|p| {
+                    format!(
+                        "{}->{}/{}",
+                        p.external,
+                        p.internal,
+                        protocol_str(p.protocol)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!("      Ports: {ports}");
+        }
+        if !container.env.is_empty() {
+            let env = container
+                .env
+                .iter()
+                .map(|e| format!("{}={}", e.name, e.value))
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!("      Env:   {env}");
+        }
+    }
+}
+
+fn or_none(value: &str) -> &str {
+    if value.is_empty() { "<none>" } else { value }
+}
+
+fn protocol_str(protocol: i32) -> &'static str {
+    match Protocol::try_from(protocol) {
+        Ok(Protocol::Tcp) => "tcp",
+        Ok(Protocol::Udp) => "udp",
+        Err(_) => "unknown",
+    }
 }

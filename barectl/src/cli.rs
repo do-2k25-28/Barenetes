@@ -19,6 +19,14 @@ pub enum Commands {
     /// Create a pod with a single container
     #[command(name = "createPod")]
     CreatePod(CreatePodArgs),
+
+    /// Fetch a pod by name
+    #[command(name = "getPod")]
+    GetPod(GetPodArgs),
+
+    /// List pods, optionally filtered by name/namespace/image
+    #[command(name = "listPods")]
+    ListPods(ListPodsArgs),
 }
 
 #[derive(Args)]
@@ -58,6 +66,32 @@ pub struct CreatePodArgs {
     /// Memory limit in MB
     #[arg(long = "memory-limit")]
     pub memory_limit: Option<i32>,
+}
+
+#[derive(Args)]
+pub struct GetPodArgs {
+    /// Pod name
+    #[arg(long)]
+    pub name: String,
+
+    /// Namespace the pod is in
+    #[arg(long, default_value = "default")]
+    pub namespace: String,
+}
+
+#[derive(Args)]
+pub struct ListPodsArgs {
+    /// Only show the pod with this exact name
+    #[arg(long)]
+    pub name: Option<String>,
+
+    /// Only show pods in this exact namespace
+    #[arg(long)]
+    pub namespace: Option<String>,
+
+    /// Only show pods with a container running this exact image
+    #[arg(long)]
+    pub image: Option<String>,
 }
 
 fn parse_port(raw: &str) -> Result<Port, String> {
