@@ -161,6 +161,9 @@ name = "barectl"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "proto",
+ "tokio",
+ "tonic",
 ]
 
 [[package]]
