@@ -23,6 +23,10 @@ pub enum Commands {
     /// Fetch a pod by name
     #[command(name = "getPod")]
     GetPod(GetPodArgs),
+
+    /// List pods, optionally filtered by name/namespace/image
+    #[command(name = "listPods")]
+    ListPods(ListPodsArgs),
 }
 
 #[derive(Args)]
@@ -73,6 +77,21 @@ pub struct GetPodArgs {
     /// Namespace the pod is in
     #[arg(long, default_value = "default", value_parser = non_empty)]
     pub namespace: String,
+}
+
+#[derive(Args)]
+pub struct ListPodsArgs {
+    /// Only show the pod with this exact name
+    #[arg(long, value_parser = non_empty)]
+    pub name: Option<String>,
+
+    /// Only show pods in this exact namespace
+    #[arg(long, value_parser = non_empty)]
+    pub namespace: Option<String>,
+
+    /// Only show pods with a container running this exact image
+    #[arg(long, value_parser = non_empty)]
+    pub image: Option<String>,
 }
 
 /// Rejects an empty (or whitespace-only) value, so a mistake like `--name ""`
