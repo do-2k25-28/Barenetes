@@ -2,7 +2,7 @@
 use proto::api::v1::{
     CreatePodRequest, CreatePodResponse, DeletePodRequest, DeletePodResponse, GetNodeRequest,
     GetNodeResponse, GetPodRequest, GetPodResponse, ListNodesRequest, ListNodesResponse,
-    ListPodsRequest, ListPodsResponse,
+    ListPodsRequest, ListPodsResponse, WatchDesiredStateEvent, watch_desired_state_event,
 };
 use proto::shared::v1::{PodDetail, PodStatus};
 use tonic::{Request, Response, Status};
@@ -68,7 +68,12 @@ impl ApiService {
             ..Default::default()
         };
 
-        if !self.store.create_pod(pod_detail.clone()).await {
+        if !self
+            .store
+            .create_pod(pod_detail.clone())
+            .await
+            .map_err(|e| e.to_status())?
+        {
             return Err(crate::errors::pod_already_exists(&namespace, &name));
         }
 
@@ -79,10 +84,30 @@ impl ApiService {
 
     pub async fn delete_pod_impl(
         &self,
-        _request: Request<DeletePodRequest>,
+        request: Request<DeletePodRequest>,
     ) -> Result<Response<DeletePodResponse>, Status> {
-        // TODO: store.remove_pod, return NotFound if it didn't exist
-        Err(Status::unimplemented("delete_pod is not yet implemented"))
+        let req = request.into_inner();
+
+        let pod = self
+            .store
+            .remove_pod(&req.namespace, &req.name)
+            .await
+            .map_err(|e| e.to_status())?
+            .ok_or_else(|| crate::errors::pod_not_found(&req.namespace, &req.name))?;
+
+        if !pod.node_name.is_empty() {
+            self.store
+                .publish_desired_state_event(
+                    &pod.node_name,
+                    WatchDesiredStateEvent {
+                        action: watch_desired_state_event::Action::Stop as i32,
+                        pod: pod.core,
+                    },
+                )
+                .await;
+        }
+
+        Ok(Response::new(DeletePodResponse { name: req.name }))
     }
 
     pub async fn get_pod_impl(
@@ -94,6 +119,7 @@ impl ApiService {
             .store
             .get_pod(&req.namespace, &req.name)
             .await
+            .map_err(|e| e.to_status())?
             .ok_or_else(|| crate::errors::pod_not_found(&req.namespace, &req.name))?;
         Ok(Response::new(GetPodResponse { pod: Some(pod) }))
     }
@@ -102,7 +128,7 @@ impl ApiService {
         &self,
         _request: Request<ListPodsRequest>,
     ) -> Result<Response<ListPodsResponse>, Status> {
-        let pods = self.store.list_pods().await;
+        let pods = self.store.list_pods().await.map_err(|e| e.to_status())?;
         Ok(Response::new(ListPodsResponse { pods }))
     }
 
@@ -115,6 +141,7 @@ impl ApiService {
             .store
             .get_node(&req.name)
             .await
+            .map_err(|e| e.to_status())?
             .ok_or_else(|| crate::errors::node_not_found(&req.name))?;
         Ok(Response::new(GetNodeResponse { node: Some(node) }))
     }
@@ -123,7 +150,7 @@ impl ApiService {
         &self,
         _request: Request<ListNodesRequest>,
     ) -> Result<Response<ListNodesResponse>, Status> {
-        let nodes = self.store.list_nodes().await;
+        let nodes = self.store.list_nodes().await.map_err(|e| e.to_status())?;
         Ok(Response::new(ListNodesResponse { nodes }))
     }
 }
@@ -149,7 +176,7 @@ mod tests {
     async fn test_get_pod_returns_inserted_pod() {
         let service = service();
         let pod = test_support::pod_detail("default", "my-pod");
-        service.store.upsert_pod(pod.clone()).await;
+        service.store.upsert_pod(pod.clone()).await.unwrap();
 
         let response = service
             .get_pod_impl(get_pod_request("default", "my-pod"))
@@ -181,7 +208,11 @@ mod tests {
     async fn test_get_node_returns_inserted_node() {
         let service = service();
         let node = test_support::node("node-1", NodeStatus::Ready);
-        service.store.upsert_and_publish_node(node.clone()).await;
+        service
+            .store
+            .upsert_and_publish_node(node.clone())
+            .await
+            .unwrap();
 
         let response = service
             .get_node_impl(get_node_request("node-1"))
@@ -223,7 +254,7 @@ mod tests {
     async fn test_list_pods_returns_single_pod() {
         let service = service();
         let pod = test_support::pod_detail("default", "my-pod");
-        service.store.upsert_pod(pod.clone()).await;
+        service.store.upsert_pod(pod.clone()).await.unwrap();
 
         let response = service
             .list_pods_impl(Request::new(ListPodsRequest {}))
@@ -242,7 +273,7 @@ mod tests {
             test_support::pod_detail("kube-system", "pod-c"),
         ];
         for pod in &expected {
-            service.store.upsert_pod(pod.clone()).await;
+            service.store.upsert_pod(pod.clone()).await.unwrap();
         }
 
         let response = service
@@ -273,7 +304,11 @@ mod tests {
     async fn test_list_nodes_returns_single_node() {
         let service = service();
         let node = test_support::node("node-1", NodeStatus::Ready);
-        service.store.upsert_and_publish_node(node.clone()).await;
+        service
+            .store
+            .upsert_and_publish_node(node.clone())
+            .await
+            .unwrap();
 
         let response = service
             .list_nodes_impl(Request::new(ListNodesRequest {}))
@@ -292,7 +327,11 @@ mod tests {
             test_support::node("node-c", NodeStatus::NotReady),
         ];
         for node in &expected {
-            service.store.upsert_and_publish_node(node.clone()).await;
+            service
+                .store
+                .upsert_and_publish_node(node.clone())
+                .await
+                .unwrap();
         }
 
         let response = service
@@ -359,6 +398,7 @@ mod tests {
             .store
             .get_pod("default", "my-pod")
             .await
+            .expect("etcd should be reachable")
             .expect("pod should be in the store");
         assert_eq!(stored.node_name, "");
     }
@@ -378,7 +418,7 @@ mod tests {
             .expect_err("second create_pod should fail");
 
         assert_eq!(err.code(), Code::AlreadyExists);
-        assert_eq!(service.store.list_pods().await.len(), 1);
+        assert_eq!(service.store.list_pods().await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -505,6 +545,13 @@ mod tests {
         assert_eq!(err.code(), Code::InvalidArgument);
     }
 
+    fn delete_pod_request(namespace: &str, name: &str) -> Request<DeletePodRequest> {
+        Request::new(DeletePodRequest {
+            name: name.to_string(),
+            namespace: namespace.to_string(),
+        })
+    }
+
     #[tokio::test]
     async fn test_create_pod_empty_container_name_is_invalid_argument() {
         let service = service();
@@ -517,6 +564,39 @@ mod tests {
             .expect_err("empty container name should fail");
 
         assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_delete_pod_removes_existing_pod_and_returns_name() {
+        let service = service();
+        service
+            .create_pod_impl(create_pod_request("default", "my-pod"))
+            .await
+            .expect("create_pod should succeed");
+
+        let response = service
+            .delete_pod_impl(delete_pod_request("default", "my-pod"))
+            .await
+            .expect("delete_pod should succeed")
+            .into_inner();
+
+        assert_eq!(response.name, "my-pod");
+        assert_eq!(
+            service.store.get_pod("default", "my-pod").await.unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delete_pod_missing_pod_returns_not_found() {
+        let service = service();
+
+        let err = service
+            .delete_pod_impl(delete_pod_request("default", "does-not-exist"))
+            .await
+            .expect_err("delete_pod should fail for an unknown pod");
+
+        assert_eq!(err.code(), Code::NotFound);
     }
 
     #[tokio::test]
@@ -538,5 +618,89 @@ mod tests {
             .expect_err("duplicate container names should fail");
 
         assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_delete_pod_publishes_deleted_event() {
+        let service = service();
+        let mut events = service.store.subscribe_pod_events();
+        service
+            .create_pod_impl(create_pod_request("default", "my-pod"))
+            .await
+            .expect("create_pod should succeed");
+        events.try_recv().expect("ADDED event from create_pod"); // drain the create event
+
+        service
+            .delete_pod_impl(delete_pod_request("default", "my-pod"))
+            .await
+            .expect("delete_pod should succeed");
+
+        let event = events
+            .try_recv()
+            .expect("a DELETED event should have been published");
+        assert_eq!(event.event_type, EventType::Deleted as i32);
+    }
+
+    #[tokio::test]
+    async fn test_delete_pod_publishes_stop_to_the_assigned_node() {
+        let service = service();
+        // create_pod never assigns a node, so seed a scheduled pod directly.
+        let mut scheduled = test_support::pod_detail("default", "my-pod");
+        scheduled.node_name = "node-a".to_string();
+        service.store.upsert_pod(scheduled.clone()).await.unwrap();
+
+        let mut desired_state_events = service.store.subscribe_desired_state_events("node-a").await;
+
+        service
+            .delete_pod_impl(delete_pod_request("default", "my-pod"))
+            .await
+            .expect("delete_pod should succeed");
+
+        let event = desired_state_events
+            .try_recv()
+            .expect("node-a should receive a STOP event");
+        assert_eq!(event.action, watch_desired_state_event::Action::Stop as i32);
+        assert_eq!(event.pod, scheduled.core);
+    }
+
+    #[tokio::test]
+    async fn test_delete_pod_stop_goes_only_to_the_assigned_node() {
+        let service = service();
+        let mut scheduled = test_support::pod_detail("default", "my-pod");
+        scheduled.node_name = "node-a".to_string();
+        service.store.upsert_pod(scheduled).await.unwrap();
+
+        let mut other_node = service.store.subscribe_desired_state_events("node-b").await;
+
+        service
+            .delete_pod_impl(delete_pod_request("default", "my-pod"))
+            .await
+            .expect("delete_pod should succeed");
+
+        assert!(
+            other_node.try_recv().is_err(),
+            "node-b must not be told to stop a pod scheduled on node-a"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delete_pod_without_node_name_skips_desired_state_event() {
+        let service = service();
+        service
+            .create_pod_impl(create_pod_request("default", "my-pod"))
+            .await
+            .expect("create_pod should succeed");
+
+        let mut desired_state_events = service.store.subscribe_desired_state_events("").await;
+
+        service
+            .delete_pod_impl(delete_pod_request("default", "my-pod"))
+            .await
+            .expect("delete_pod should succeed");
+
+        assert!(
+            desired_state_events.try_recv().is_err(),
+            "a never-scheduled pod shouldn't trigger a desired-state event"
+        );
     }
 }

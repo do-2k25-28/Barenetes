@@ -97,11 +97,14 @@ message WatchDesiredStateRequest { // agent subscribes to desired state for its 
 
 message WatchDesiredStateEvent {
   Action action = 1;
-  shared.v1.PodWithSpec pod = 2; // pod concerned by the event
+  shared.v1.PodWithSpec pod = 2; // pod concerned by the event, absent on SYNCED
 
   enum Action {
     RUN = 0;
     STOP = 1;
+    // End of the opening snapshot: everything before it is the node's full desired
+    // set, so the agent can now stop whatever it runs that wasn't named.
+    SYNCED = 2;
   }
 }
 
