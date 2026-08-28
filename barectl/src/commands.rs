@@ -1,10 +1,10 @@
 use proto::api::v1::api_server_client::ApiServerClient;
-use proto::api::v1::{CreatePodRequest, GetPodRequest, ListPodsRequest};
+use proto::api::v1::{CreatePodRequest, DeletePodRequest, GetPodRequest, ListPodsRequest};
 use proto::shared::v1::{
     Container, Pod, PodDetail, PodSpec, PodStatus, PodWithSpec, Protocol, Resources,
 };
 
-use crate::cli::{CreatePodArgs, GetPodArgs, ListPodsArgs};
+use crate::cli::{CreatePodArgs, DeletePodArgs, GetPodArgs, ListPodsArgs};
 use crate::error::CliError;
 
 pub async fn create_pod(server: &str, args: CreatePodArgs) -> Result<(), CliError> {
@@ -174,6 +174,28 @@ fn matches_filters(pod: &PodDetail, args: &ListPodsArgs) -> bool {
         return false;
     }
     true
+}
+
+pub async fn delete_pod(server: &str, args: DeletePodArgs) -> Result<(), CliError> {
+    let mut client = ApiServerClient::connect(server.to_string())
+        .await
+        .map_err(|source| CliError::Connect {
+            addr: server.to_string(),
+            source,
+        })?;
+
+    client
+        .delete_pod(DeletePodRequest {
+            name: args.name.clone(),
+            namespace: args.namespace.clone(),
+        })
+        .await?;
+
+    println!(
+        "pod/{} deleted in namespace \"{}\"",
+        args.name, args.namespace
+    );
+    Ok(())
 }
 
 fn print_pod(pod: &PodDetail) {
