@@ -85,31 +85,17 @@ impl ApiService {
         request: Request<UpdateNodeStatusRequest>,
     ) -> Result<Response<UpdateNodeStatusResponse>, Status> {
         let req = request.into_inner();
-        let mut node = req
+        let node = req
             .node
             .ok_or_else(|| crate::errors::missing_node("<unknown>"))?;
         if node.name.is_empty() {
             return Err(Status::invalid_argument("missing node name"));
         }
 
-        // The agent owns capacity and allocatable, which only it can observe. Status is
-        // liveness, which the API derives from whether a desired-state stream is open, so
-        // whatever the agent reported here is discarded. READY is the proto3 default, so
-        // trusting it would let an unset field mark a node alive with no stream at all.
-        node.status = match self
-            .store
-            .get_node(&node.name)
-            .await
-            .map_err(|e| e.to_status())?
-        {
-            Some(known) => known.status,
-            // A node registering for the first time has no stream yet; its own
-            // WatchDesiredState promotes it moments later.
-            None => proto::shared::v1::NodeStatus::NotReady as i32,
-        };
-
+        // Whatever status the agent reported is discarded: the store preserves its own,
+        // atomically, so a stream opening mid-call can't be clobbered.
         self.store
-            .upsert_and_publish_node(node)
+            .register_node(node)
             .await
             .map_err(|e| e.to_status())?;
 
@@ -555,6 +541,33 @@ mod tests {
         let mut pod = test_support::pod_detail(namespace, name);
         pod.node_name = node_name.to_string();
         pod
+    }
+
+    #[tokio::test]
+    async fn test_register_while_stream_open_keeps_node_ready() {
+        let service = test_support::service();
+        service
+            .update_node_status_impl(update_node_status_request("node-a", NodeStatus::Ready))
+            .await
+            .unwrap();
+        let _stream = service
+            .watch_desired_state_impl(watch_desired_state_request("node-a"))
+            .await
+            .unwrap()
+            .into_inner();
+
+        service
+            .update_node_status_impl(update_node_status_request("node-a", NodeStatus::NotReady))
+            .await
+            .unwrap();
+
+        let stored = service.store.get_node("node-a").await.unwrap().unwrap();
+        assert_eq!(
+            stored.status,
+            NodeStatus::Ready as i32,
+            "re-registering must not contradict the stream still holding the node up"
+        );
+        assert_eq!(service.store.watcher_count("node-a").await, 1);
     }
 
     #[tokio::test]

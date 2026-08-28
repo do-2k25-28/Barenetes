@@ -400,9 +400,59 @@ impl Store {
         Ok(true)
     }
 
-    /// Inserts or replaces a node, then publishes the resulting ADDED (first report)
-    /// or MODIFIED event.
-    pub async fn upsert_and_publish_node(&self, node: Node) -> Result<(), StoreError> {
+    /// Registers an agent's report of a node, preserving whatever liveness status the
+    /// store already holds: the agent owns capacity and allocatable, the API owns status.
+    /// A node the store has never seen starts NOT_READY (it has no stream yet), and READY
+    /// is the proto3 default, so trusting the reported field would mark it alive with no
+    /// stream. Publishes ADDED on first registration, MODIFIED afterwards.
+    ///
+    /// The read and the write share one lock acquisition, so a stream opening or closing
+    /// between them can't be clobbered by a stale status.
+    pub async fn register_node(&self, mut node: Node) -> Result<(), StoreError> {
+        let event_type = if let Some(ref client) = self.client {
+            let _guard = self.node_op_lock.lock().await;
+            let key = node_etcd_key(&node.name);
+            let resp = client.clone().get(key.clone(), None).await?;
+            let existing = resp.kvs().first();
+            let is_new = existing.is_none();
+            node.status = match existing.map(|kv| Node::decode(kv.value())) {
+                Some(Ok(known)) => known.status,
+                Some(Err(_)) => {
+                    tracing::warn!(node = %node.name, "replacing undecodable node record");
+                    NodeStatus::NotReady as i32
+                }
+                None => NodeStatus::NotReady as i32,
+            };
+            client.clone().put(key, node.encode_to_vec(), None).await?;
+            if is_new {
+                EventType::Added
+            } else {
+                EventType::Modified
+            }
+        } else {
+            let mut nodes = self.nodes.write().await;
+            node.status = match nodes.get(&node.name) {
+                Some(known) => known.status,
+                None => NodeStatus::NotReady as i32,
+            };
+            match nodes.insert(node.name.clone(), node.clone()) {
+                None => EventType::Added,
+                Some(_) => EventType::Modified,
+            }
+        };
+
+        self.publish_node_event(WatchNodeEvent {
+            event_type: event_type as i32,
+            node: Some(node),
+        });
+        Ok(())
+    }
+
+    /// Inserts or replaces a node verbatim, status included, then publishes the resulting
+    /// ADDED or MODIFIED event. Test-only seeding: registration goes through
+    /// `register_node`, which is what keeps the API the sole writer of node status.
+    #[cfg(test)]
+    pub(crate) async fn upsert_and_publish_node(&self, node: Node) -> Result<(), StoreError> {
         let event_type = if let Some(ref client) = self.client {
             let _guard = self.node_op_lock.lock().await;
             let key = node_etcd_key(&node.name);
@@ -704,7 +754,7 @@ fn nodes_prefix() -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use proto::api::v1::watch_desired_state_event;
-    use proto::shared::v1::NodeStatus;
+    use proto::shared::v1::{NodeStatus, Resources};
 
     use super::*;
     use crate::test_support;
@@ -897,6 +947,103 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn test_register_node_first_seen_is_not_ready() {
+        let store = Store::new();
+        let mut events = store.subscribe_node_events();
+
+        store
+            .register_node(test_support::node("node-1", NodeStatus::Ready))
+            .await
+            .unwrap();
+
+        let event = events.try_recv().expect("a node event should be published");
+        assert_eq!(event.event_type, EventType::Added as i32);
+        assert_eq!(
+            event.node.unwrap().status,
+            NodeStatus::NotReady as i32,
+            "a node with no stream open isn't alive, whatever it reported"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_register_node_preserves_ready_status() {
+        let store = Store::new();
+        // Stands in for the node's stream having opened.
+        store
+            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
+            .await
+            .unwrap();
+
+        store
+            .register_node(test_support::node("node-1", NodeStatus::NotReady))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store.get_node("node-1").await.unwrap().map(|n| n.status),
+            Some(NodeStatus::Ready as i32),
+            "registration must not overwrite the status its own stream established"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_register_node_preserves_not_ready_status() {
+        let store = Store::new();
+        store
+            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::NotReady))
+            .await
+            .unwrap();
+
+        store
+            .register_node(test_support::node("node-1", NodeStatus::Ready))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store.get_node("node-1").await.unwrap().map(|n| n.status),
+            Some(NodeStatus::NotReady as i32)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_register_node_updates_capacity_and_allocatable() {
+        let store = Store::new();
+        store
+            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
+            .await
+            .unwrap();
+
+        let mut reported = test_support::node("node-1", NodeStatus::NotReady);
+        reported.capacity = Some(Resources {
+            cpu: 4000,
+            memory: 8192,
+        });
+        reported.allocatable = Some(Resources {
+            cpu: 3500,
+            memory: 7000,
+        });
+        store.register_node(reported).await.unwrap();
+
+        let stored = store.get_node("node-1").await.unwrap().unwrap();
+        assert_eq!(
+            stored.capacity,
+            Some(Resources {
+                cpu: 4000,
+                memory: 8192
+            }),
+            "the agent still owns the fields only it can observe"
+        );
+        assert_eq!(
+            stored.allocatable,
+            Some(Resources {
+                cpu: 3500,
+                memory: 7000
+            })
+        );
+        assert_eq!(stored.status, NodeStatus::Ready as i32);
     }
 
     #[tokio::test]
