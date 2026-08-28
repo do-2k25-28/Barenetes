@@ -7,19 +7,19 @@ use std::io;
 use std::sync::{Arc, Mutex};
 use tonic::{Request, Response, Status};
 
-use crate::ip_pool::IpPool;
+use crate::ip_pool::IpPoolDirectory;
 use crate::state::StateStore;
 
 pub(crate) struct CniRpcService {
-    pool: IpPool,
+    pools: IpPoolDirectory,
     state: StateStore,
     operation_lock: Arc<Mutex<()>>,
 }
 
 impl CniRpcService {
-    pub(crate) fn new(pool: IpPool, state: StateStore) -> Self {
+    pub(crate) fn new(pools: IpPoolDirectory, state: StateStore) -> Self {
         Self {
-            pool,
+            pools,
             state,
             operation_lock: Arc::new(Mutex::new(())),
         }
@@ -32,14 +32,14 @@ impl CniService for CniRpcService {
         &self,
         request: Request<AddWorkloadNetworkRequest>,
     ) -> Result<Response<AddWorkloadNetworkResponse>, Status> {
-        let pool = self.pool.clone();
+        let pools = self.pools.clone();
         let state = self.state.clone();
         let operation_lock = self.operation_lock.clone();
         let network = tokio::task::spawn_blocking(move || {
             let _guard = operation_lock
                 .lock()
                 .map_err(|_| io::Error::other("CNI operation lock is poisoned"))?;
-            crate::network::add_workload_network(request.into_inner(), &pool, &state)
+            crate::network::add_workload_network(request.into_inner(), &pools, &state)
         })
         .await
         .map_err(|_| Status::internal("network worker failed"))?
@@ -53,14 +53,14 @@ impl CniService for CniRpcService {
         &self,
         request: Request<DeleteWorkloadNetworkRequest>,
     ) -> Result<Response<DeleteWorkloadNetworkResponse>, Status> {
-        let pool = self.pool.clone();
+        let pools = self.pools.clone();
         let state = self.state.clone();
         let operation_lock = self.operation_lock.clone();
         let success = tokio::task::spawn_blocking(move || {
             let _guard = operation_lock
                 .lock()
                 .map_err(|_| io::Error::other("CNI operation lock is poisoned"))?;
-            crate::network::delete_workload_network(request.into_inner(), &pool, &state)
+            crate::network::delete_workload_network(request.into_inner(), &pools, &state)
         })
         .await
         .map_err(|_| Status::internal("network worker failed"))?

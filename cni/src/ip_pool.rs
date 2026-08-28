@@ -9,6 +9,34 @@ use std::path::{Path, PathBuf};
 
 const MAX_STATE_SIZE: u64 = 1024 * 1024;
 
+// Un répertoire par VLAN isole le carnet d'adresses de chaque tenant : deux tenants
+// ne peuvent jamais partager ni verrou ni plage d'allocation.
+#[derive(Clone)]
+pub(crate) struct IpPoolDirectory {
+    root: PathBuf,
+    node: u8,
+}
+
+impl IpPoolDirectory {
+    pub(crate) fn new(root: impl Into<PathBuf>, node: u8) -> Self {
+        Self {
+            root: root.into(),
+            node,
+        }
+    }
+
+    pub(crate) fn pool(&self, vlan: u32) -> io::Result<IpPool> {
+        let vlan = u8::try_from(vlan).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "vlan_id must fit in a single byte",
+            )
+        })?;
+        let (first, last) = crate::addressing::pool_range(vlan, self.node);
+        IpPool::new(self.root.join(format!("vlan-{vlan}")), first, last)
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct IpPool {
     directory: PathBuf,
@@ -123,6 +151,26 @@ fn write_state(directory: &Path, state: &PoolState) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn directory_gives_each_tenant_its_own_pool() {
+        let directory = tempfile::tempdir().unwrap();
+        let pools = IpPoolDirectory::new(directory.path(), 1);
+        let tenant_a = pools.pool(100).unwrap();
+        let tenant_b = pools.pool(200).unwrap();
+        let address_a = tenant_a.allocate().unwrap();
+        let address_b = tenant_b.allocate().unwrap();
+        assert_ne!(address_a, address_b);
+        assert_eq!(address_a, Ipv4Addr::new(10, 100, 1, 2));
+        assert_eq!(address_b, Ipv4Addr::new(10, 200, 1, 2));
+    }
+
+    #[test]
+    fn directory_rejects_a_vlan_outside_a_single_byte() {
+        let directory = tempfile::tempdir().unwrap();
+        let pools = IpPoolDirectory::new(directory.path(), 1);
+        assert!(pools.pool(4094).is_err());
+    }
 
     #[test]
     fn allocates_persists_and_releases_addresses() {

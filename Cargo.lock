@@ -245,6 +245,7 @@ name = "cni"
 version = "0.1.0"
 dependencies = [
  "fs2",
+ "hyper-util",
  "libc",
  "proto",
  "serde",
@@ -254,6 +255,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tonic",
+ "tower",
 ]
 
 [[package]]

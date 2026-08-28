@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package cni.v1;
 
+import "shared/v1/container.proto";
+
 // Local RPC interface exposed by the CNI daemon to the node agent.
 service CniService {
   rpc AddWorkloadNetwork(AddWorkloadNetworkRequest) returns (AddWorkloadNetworkResponse);
@@ -23,7 +25,7 @@ message NetworkRef {
   // Readable name for the network.
   string network_name = 1;
 
-  // Explicit bridge VLAN used to isolate this tenant (1-4094).
+  // Explicit bridge VLAN used to isolate this tenant (1-255).
   uint32 vlan_id = 2;
 }
 
@@ -37,10 +39,10 @@ message WorkloadNetwork {
   // Name of the interface in the workload, often "eth0".
   string interface_name = 2;
 
-  // IP address of the workload, for example "10.244.1.0".
+  // IP address of the workload, for example "10.100.1.2".
   string ip_address = 3;
 
-  // Gateway address, for example "10.244.1.1".
+  // Gateway address, for example "10.100.1.1".
   string gateway = 4;
 
   // Name of the dedicated tenant network.
@@ -69,19 +71,7 @@ message AddWorkloadNetworkRequest {
   string interface_name = 4;
 
   // Explicit host-to-workload port mappings.
-  repeated PortMapping port_mappings = 5;
-}
-
-message PortMapping {
-  uint32 host_port = 1;
-  uint32 workload_port = 2;
-  PortProtocol protocol = 3;
-}
-
-enum PortProtocol {
-  PORT_PROTOCOL_UNSPECIFIED = 0;
-  PORT_PROTOCOL_TCP = 1;
-  PORT_PROTOCOL_UDP = 2;
+  repeated shared.v1.Port port_mappings = 5;
 }
 
 message AddWorkloadNetworkResponse {

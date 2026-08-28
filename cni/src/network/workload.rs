@@ -1,4 +1,4 @@
-use crate::ip_pool::IpPool;
+use crate::ip_pool::IpPoolDirectory;
 use std::fs::File;
 use std::io;
 use std::os::unix::fs::MetadataExt;
@@ -15,12 +15,11 @@ use proto::cni::v1::{
 
 const IP: &str = "ip";
 const BRIDGE: &str = "bridge";
-const GATEWAY: &str = "10.244.0.1";
 const NSENTER: &str = "nsenter";
 
 pub(crate) fn add_workload_network(
     request: AddWorkloadNetworkRequest,
-    pool: &IpPool,
+    pools: &IpPoolDirectory,
     state: &StateStore,
 ) -> io::Result<WorkloadNetwork> {
     let (workload, network, pid, interface) = validate_add_request(&request)?;
@@ -40,10 +39,22 @@ pub(crate) fn add_workload_network(
                 "workload network already exists with different settings",
             ));
         }
-        return Ok(record_to_network(&record));
+        if !succeeds(IP, &["link", "show", "dev", &record.host_interface])? {
+            // Reconcile a durable record whose kernel interface disappeared.
+            super::firewall::delete_mappings(&record.ip_address, &record.port_mappings)?;
+            release_record_ip(pools, &record)?;
+            state.delete(
+                &workload.workload_name,
+                &workload.instance_name,
+                &network.network_name,
+            )?;
+        } else {
+            super::firewall::add_mappings(&record.ip_address, &record.port_mappings)?;
+            return Ok(record_to_network(&record));
+        }
     }
     for mapping in &request.port_mappings {
-        if state.port_is_used(mapping.protocol, mapping.host_port)? {
+        if state.port_is_used(mapping.protocol, mapping.external)? {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "host port is already used",
@@ -51,6 +62,10 @@ pub(crate) fn add_workload_network(
         }
     }
 
+    let node = super::node_id()?;
+    let gateway = super::vlan::ensure(network.vlan_id as u8, node)?;
+    let gateway_string = gateway.to_string();
+    let pool = pools.pool(network.vlan_id)?;
     let address = pool.allocate()?;
     let host_interface = format!(
         "v{}",
@@ -103,7 +118,13 @@ pub(crate) fn add_workload_network(
         run_in_namespace(
             &netns,
             &[
-                "route", "replace", "default", "via", GATEWAY, "dev", interface,
+                "route",
+                "replace",
+                "default",
+                "via",
+                &gateway_string,
+                "dev",
+                interface,
             ],
         )?;
         run(
@@ -118,18 +139,6 @@ pub(crate) fn add_workload_network(
             ],
         )?;
         let vlan = network.vlan_id.to_string();
-        run(
-            BRIDGE,
-            &[
-                "vlan",
-                "add",
-                "dev",
-                bridge::BRIDGE_NAME,
-                "vid",
-                &vlan,
-                "self",
-            ],
-        )?;
         run(BRIDGE, &["vlan", "del", "dev", &host_interface, "vid", "1"])?;
         run(
             BRIDGE,
@@ -160,7 +169,7 @@ pub(crate) fn add_workload_network(
         host_interface,
         interface_name: interface.to_owned(),
         ip_address: address.to_string(),
-        gateway: GATEWAY.to_owned(),
+        gateway: gateway_string,
         vlan_id: network.vlan_id,
         port_mappings: request.port_mappings.clone(),
     };
@@ -201,7 +210,7 @@ pub(crate) fn get_workload_network(
 
 pub(crate) fn delete_workload_network(
     request: DeleteWorkloadNetworkRequest,
-    pool: &IpPool,
+    pools: &IpPoolDirectory,
     state: &StateStore,
 ) -> io::Result<bool> {
     let (workload, network) = validate_refs(request.workload.as_ref(), request.network.as_ref())?;
@@ -217,19 +226,32 @@ pub(crate) fn delete_workload_network(
         run(IP, &["link", "delete", &record.host_interface])?;
     }
     super::firewall::delete_mappings(&record.ip_address, &record.port_mappings)?;
-    let address = record
-        .ip_address
-        .parse()
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "stored IP address is invalid"))?;
+    // Keep the record if IPAM release fails so a retry can recover it.
+    release_record_ip(pools, &record)?;
     state.delete(
         &workload.workload_name,
         &workload.instance_name,
         &network.network_name,
     )?;
-    if let Err(error) = pool.release(address) {
-        eprintln!("cni: failed to release {address}: {error}");
-    }
     Ok(true)
+}
+
+fn release_record_ip(pools: &IpPoolDirectory, record: &WorkloadRecord) -> io::Result<()> {
+    let address = record
+        .ip_address
+        .parse()
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "stored IP address is invalid"))?;
+    match pools
+        .pool(record.vlan_id)
+        .and_then(|pool| pool.release(address))
+    {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::InvalidInput => {
+            eprintln!("cni: skipping IPAM release for legacy record {address}: {error}");
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn validate_add_request(
@@ -250,10 +272,10 @@ fn validate_add_request(
     ] {
         validate_name(value)?;
     }
-    if !(1..=4094).contains(&network.vlan_id) {
+    if !(1..=255).contains(&network.vlan_id) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "network vlan_id must be between 1 and 4094",
+            "network vlan_id must be between 1 and 255",
         ));
     }
     let interface = if request.interface_name.is_empty() {

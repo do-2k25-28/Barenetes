@@ -1,4 +1,4 @@
-use proto::cni::v1::PortMapping;
+use proto::shared::v1::Port;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
@@ -21,7 +21,7 @@ pub(crate) struct WorkloadRecord {
     #[serde(default)]
     pub(crate) vlan_id: u32,
     #[serde(default)]
-    pub(crate) port_mappings: Vec<PortMapping>,
+    pub(crate) port_mappings: Vec<Port>,
 }
 
 #[derive(Clone)]
@@ -54,11 +54,18 @@ impl StateStore {
     pub(crate) fn save(&self, record: &WorkloadRecord) -> io::Result<()> {
         std::fs::create_dir_all(&self.directory)?;
         std::fs::set_permissions(&self.directory, std::fs::Permissions::from_mode(0o700))?;
+        let bytes = serde_json::to_vec(record).map_err(io::Error::other)?;
+        if bytes.len() as u64 > MAX_STATE_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "workload state is too large",
+            ));
+        }
         let mut temporary = tempfile::NamedTempFile::new_in(&self.directory)?;
         temporary
             .as_file()
             .set_permissions(std::fs::Permissions::from_mode(0o600))?;
-        serde_json::to_writer(&mut temporary, record).map_err(io::Error::other)?;
+        temporary.write_all(&bytes)?;
         temporary.flush()?;
         temporary.as_file().sync_all()?;
         temporary
@@ -104,7 +111,7 @@ impl StateStore {
             if record
                 .port_mappings
                 .iter()
-                .any(|mapping| mapping.protocol == protocol && mapping.host_port == host_port)
+                .any(|mapping| mapping.protocol == protocol && mapping.external == host_port)
             {
                 return Ok(true);
             }
@@ -143,7 +150,7 @@ pub(crate) fn stable_id(parts: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proto::cni::v1::PortProtocol;
+    use proto::shared::v1::Protocol;
 
     fn record() -> WorkloadRecord {
         WorkloadRecord {
@@ -152,13 +159,13 @@ mod tests {
             network_name: "tenant-a".into(),
             host_interface: "v123".into(),
             interface_name: "eth0".into(),
-            ip_address: "10.244.0.2".into(),
-            gateway: "10.244.0.1".into(),
+            ip_address: "10.100.1.2".into(),
+            gateway: "10.100.1.1".into(),
             vlan_id: 42,
-            port_mappings: vec![PortMapping {
-                host_port: 8080,
-                workload_port: 80,
-                protocol: PortProtocol::Tcp as i32,
+            port_mappings: vec![Port {
+                internal: 80,
+                external: 8080,
+                protocol: Protocol::Tcp as i32,
             }],
         }
     }
@@ -172,7 +179,7 @@ mod tests {
         let loaded = store.load("api", "api-1", "tenant-a").unwrap().unwrap();
         assert_eq!(loaded.ip_address, expected.ip_address);
         assert_eq!(loaded.vlan_id, expected.vlan_id);
-        assert!(store.port_is_used(PortProtocol::Tcp as i32, 8080).unwrap());
+        assert!(store.port_is_used(Protocol::Tcp as i32, 8080).unwrap());
         assert!(store.delete("api", "api-1", "tenant-a").unwrap());
         assert!(store.load("api", "api-1", "tenant-a").unwrap().is_none());
     }
