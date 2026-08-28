@@ -1,12 +1,10 @@
 use prost::Message;
 use std::collections::HashMap;
 use std::fmt;
-use std::time::Duration;
 
 use proto::api::v1::{WatchDesiredStateEvent, WatchNodeEvent, WatchPodEvent};
 use proto::shared::v1::{EventType, Node, NodeStatus, PodDetail, PodWithSpec};
 use tokio::sync::{Mutex, RwLock, broadcast};
-use tokio::time::Instant;
 
 #[derive(Debug)]
 pub enum StoreError {
@@ -42,13 +40,6 @@ impl From<etcd_client::Error> for StoreError {
 
 const EVENT_CHANNEL_CAPACITY: usize = 128;
 
-/// Expected interval between UpdateNodeStatus heartbeats from a live agent.
-pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
-/// A node is considered stale after this many missed heartbeats.
-pub const HEARTBEAT_TIMEOUT_MULTIPLIER: u32 = 3;
-pub const NODE_STALE_TIMEOUT: Duration =
-    Duration::from_secs(HEARTBEAT_INTERVAL.as_secs() * HEARTBEAT_TIMEOUT_MULTIPLIER as u64);
-
 /// TODO: currently in-memory only for now, will need replacing with a database
 // (etcd may be overkill for the minimal version we are trying to achieve,
 // so could look at some alternatives)
@@ -62,11 +53,16 @@ pub struct Store {
     client: Option<etcd_client::Client>,
     pods: RwLock<HashMap<(String, String), PodDetail>>,
     nodes: RwLock<HashMap<String, Node>>,
-    node_last_seen: RwLock<HashMap<String, Instant>>,
     pod_events: broadcast::Sender<WatchPodEvent>,
     node_events: broadcast::Sender<WatchNodeEvent>,
-    /// Serializes the read-modify-write on a node between heartbeat and sweeper.
+    /// Serializes the read-modify-write on a node between registration and the
+    /// connect/disconnect transitions driven by the desired-state stream.
     node_op_lock: Mutex<()>,
+    /// How many desired-state streams are open per node. A node is READY while this is
+    /// above zero. Counting rather than flipping a flag is what makes a reconnect safe:
+    /// the outgoing stream's teardown is queued on the runtime and can land after the
+    /// replacement has already opened.
+    node_watchers: Mutex<HashMap<String, usize>>,
     // One channel per node, created lazily on first publish/subscribe
     desired_state_channels: RwLock<HashMap<String, broadcast::Sender<WatchDesiredStateEvent>>>,
 }
@@ -79,10 +75,10 @@ impl Store {
             client: None,
             pods: RwLock::new(HashMap::new()),
             nodes: RwLock::new(HashMap::new()),
-            node_last_seen: RwLock::new(HashMap::new()),
             pod_events: broadcast::channel(EVENT_CHANNEL_CAPACITY).0,
             node_events: broadcast::channel(EVENT_CHANNEL_CAPACITY).0,
             node_op_lock: Mutex::new(()),
+            node_watchers: Mutex::new(HashMap::new()),
             desired_state_channels: RwLock::new(HashMap::new()),
         }
     }
@@ -92,18 +88,21 @@ impl Store {
             client: Some(client),
             pods: RwLock::new(HashMap::new()),
             nodes: RwLock::new(HashMap::new()),
-            node_last_seen: RwLock::new(HashMap::new()),
             pod_events: broadcast::channel(EVENT_CHANNEL_CAPACITY).0,
             node_events: broadcast::channel(EVENT_CHANNEL_CAPACITY).0,
             node_op_lock: Mutex::new(()),
+            node_watchers: Mutex::new(HashMap::new()),
             desired_state_channels: RwLock::new(HashMap::new()),
         }
     }
 
-    /// Populate `node_last_seen` from persisted etcd nodes so the sweeper
-    /// can see them. Each node is marked as "just seen" so it must send a
-    /// heartbeat within the normal timeout to stay Ready.
-    pub async fn load_node_liveness(&self) -> Result<(), StoreError> {
+    /// Marks every persisted node NOT_READY at boot.
+    ///
+    /// Node status survives a restart in etcd, but the streams that prove a node is alive
+    /// do not. Without this the server would come back advertising nodes as READY on the
+    /// strength of a connection that died with the previous process. Each node returns to
+    /// READY when its agent opens a desired-state stream.
+    pub async fn reset_node_liveness(&self) -> Result<(), StoreError> {
         let client = match self.client {
             Some(ref c) => c.clone(),
             None => return Ok(()),
@@ -115,18 +114,28 @@ impl Store {
                 Some(etcd_client::GetOptions::default().with_prefix()),
             )
             .await?;
-        let mut last_seen = self.node_last_seen.write().await;
+        let _guard = self.node_op_lock.lock().await;
         for kv in resp.kvs() {
-            match Node::decode(kv.value()) {
-                Ok(node) => {
-                    last_seen.insert(node.name, Instant::now());
-                }
+            let mut node = match Node::decode(kv.value()) {
+                Ok(node) => node,
                 Err(e) => {
                     let key = String::from_utf8_lossy(kv.key());
                     tracing::warn!(key = %key, error = %e, "skipping undecodable node at boot");
-                    last_seen.insert(key.into_owned(), Instant::now());
+                    continue;
                 }
+            };
+            // Only liveness is reset. CORDON and DRAIN are an operator's decision and
+            // have nothing to do with whether the node's agent is connected.
+            if node.status != NodeStatus::Ready as i32 {
+                continue;
             }
+            node.status = NodeStatus::NotReady as i32;
+            // Boot-critical: carrying on would serve a node as READY with no agent
+            // behind it, and there is no sweeper left to notice.
+            client
+                .clone()
+                .put(node_etcd_key(&node.name), node.encode_to_vec(), None)
+                .await?;
         }
         Ok(())
     }
@@ -391,9 +400,59 @@ impl Store {
         Ok(true)
     }
 
-    /// Inserts or replaces a node and records this call as a liveness heartbeat,
-    /// then publishes the resulting ADDED (first report) or MODIFIED event.
-    pub async fn upsert_and_publish_node(&self, node: Node) -> Result<(), StoreError> {
+    /// Registers an agent's report of a node, preserving whatever liveness status the
+    /// store already holds: the agent owns capacity and allocatable, the API owns status.
+    /// A node the store has never seen starts NOT_READY (it has no stream yet), and READY
+    /// is the proto3 default, so trusting the reported field would mark it alive with no
+    /// stream. Publishes ADDED on first registration, MODIFIED afterwards.
+    ///
+    /// The read and the write share one lock acquisition, so a stream opening or closing
+    /// between them can't be clobbered by a stale status.
+    pub async fn register_node(&self, mut node: Node) -> Result<(), StoreError> {
+        let event_type = if let Some(ref client) = self.client {
+            let _guard = self.node_op_lock.lock().await;
+            let key = node_etcd_key(&node.name);
+            let resp = client.clone().get(key.clone(), None).await?;
+            let existing = resp.kvs().first();
+            let is_new = existing.is_none();
+            node.status = match existing.map(|kv| Node::decode(kv.value())) {
+                Some(Ok(known)) => known.status,
+                Some(Err(_)) => {
+                    tracing::warn!(node = %node.name, "replacing undecodable node record");
+                    NodeStatus::NotReady as i32
+                }
+                None => NodeStatus::NotReady as i32,
+            };
+            client.clone().put(key, node.encode_to_vec(), None).await?;
+            if is_new {
+                EventType::Added
+            } else {
+                EventType::Modified
+            }
+        } else {
+            let mut nodes = self.nodes.write().await;
+            node.status = match nodes.get(&node.name) {
+                Some(known) => known.status,
+                None => NodeStatus::NotReady as i32,
+            };
+            match nodes.insert(node.name.clone(), node.clone()) {
+                None => EventType::Added,
+                Some(_) => EventType::Modified,
+            }
+        };
+
+        self.publish_node_event(WatchNodeEvent {
+            event_type: event_type as i32,
+            node: Some(node),
+        });
+        Ok(())
+    }
+
+    /// Inserts or replaces a node verbatim, status included, then publishes the resulting
+    /// ADDED or MODIFIED event. Test-only seeding: registration goes through
+    /// `register_node`, which is what keeps the API the sole writer of node status.
+    #[cfg(test)]
+    pub(crate) async fn upsert_and_publish_node(&self, node: Node) -> Result<(), StoreError> {
         let event_type = if let Some(ref client) = self.client {
             let _guard = self.node_op_lock.lock().await;
             let key = node_etcd_key(&node.name);
@@ -413,16 +472,115 @@ impl Store {
             }
         };
 
-        self.node_last_seen
-            .write()
-            .await
-            .insert(node.name.clone(), Instant::now());
-
         self.publish_node_event(WatchNodeEvent {
             event_type: event_type as i32,
             node: Some(node),
         });
         Ok(())
+    }
+
+    /// Records that a desired-state stream has opened for this node, marking it READY on
+    /// the first one. Returns `false` if the store has never heard of the node, so the
+    /// caller can tell the agent to register before watching.
+    ///
+    /// The count guard is held across the status write so the two can't disagree.
+    pub async fn node_watch_started(&self, name: &str) -> Result<bool, StoreError> {
+        // Checked before taking the lock so an unknown node doesn't queue behind every
+        // other connect in the cluster. The count below is still the authority.
+        if self.get_node(name).await?.is_none() {
+            return Ok(false);
+        }
+
+        let mut watchers = self.node_watchers.lock().await;
+        let current = watchers.get(name).copied().unwrap_or(0);
+        if current == 0 {
+            // A `false` here only means the status was already READY, which is the
+            // ordinary case; existence was settled above.
+            self.set_node_status(name, NodeStatus::Ready).await?;
+        }
+        watchers.insert(name.to_string(), current + 1);
+        Ok(true)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn watcher_count(&self, name: &str) -> usize {
+        self.node_watchers
+            .lock()
+            .await
+            .get(name)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Records that a stream has closed, marking the node NOT_READY once the last one
+    /// goes. Called from a `Drop`, so there is nowhere to return an error to.
+    pub async fn node_watch_ended(&self, name: &str) {
+        let mut watchers = self.node_watchers.lock().await;
+        let Some(count) = watchers.get_mut(name) else {
+            return;
+        };
+        *count = count.saturating_sub(1);
+        if *count > 0 {
+            return;
+        }
+
+        watchers.remove(name);
+        if let Err(e) = self.set_node_status(name, NodeStatus::NotReady).await {
+            tracing::warn!(
+                node = %name,
+                error = ?e,
+                "failed to mark node NotReady after its last watch ended"
+            );
+        }
+    }
+
+    /// Sets the node's status and publishes the resulting MODIFIED event. Returns
+    /// `false` if no node exists by that name, or if it already had that status, so a
+    /// reconnecting agent doesn't republish an event that says nothing changed.
+    ///
+    /// Serialised against registration on the same node: the etcd branch shares
+    /// `node_op_lock`, the in-memory branch shares the `nodes` write guard.
+    pub async fn set_node_status(
+        &self,
+        name: &str,
+        status: NodeStatus,
+    ) -> Result<bool, StoreError> {
+        let node = if let Some(ref client) = self.client {
+            let _guard = self.node_op_lock.lock().await;
+            let key = node_etcd_key(name);
+            let resp = client.clone().get(key.clone(), None).await?;
+            let Some(kv) = resp.kvs().first() else {
+                return Ok(false);
+            };
+            // Skip rather than propagate: this surfaces on the agent's watch, and
+            // failing it would lock that agent out permanently over one bad record.
+            let Ok(mut node) = Node::decode(kv.value()) else {
+                tracing::warn!(node = %name, "skipping undecodable node record");
+                return Ok(false);
+            };
+            if node.status == status as i32 {
+                return Ok(false);
+            }
+            node.status = status as i32;
+            client.clone().put(key, node.encode_to_vec(), None).await?;
+            node
+        } else {
+            let mut nodes = self.nodes.write().await;
+            let Some(node) = nodes.get_mut(name) else {
+                return Ok(false);
+            };
+            if node.status == status as i32 {
+                return Ok(false);
+            }
+            node.status = status as i32;
+            node.clone()
+        };
+
+        self.publish_node_event(WatchNodeEvent {
+            event_type: EventType::Modified as i32,
+            node: Some(node),
+        });
+        Ok(true)
     }
 
     pub async fn get_node(&self, name: &str) -> Result<Option<Node>, StoreError> {
@@ -464,70 +622,6 @@ impl Store {
         } else {
             Ok(self.nodes.read().await.values().cloned().collect())
         }
-    }
-
-    /// Marks any node that hasn't reported a heartbeat within `timeout` as NOT_READY,
-    /// publishing a node MODIFIED event for each newly-stale node. Returns their names.
-    pub async fn sweep_stale_nodes(&self, timeout: Duration) -> Vec<String> {
-        let now = Instant::now();
-        let stale_names: Vec<String> = {
-            let last_seen = self.node_last_seen.read().await;
-            last_seen
-                .iter()
-                .filter(|(_, seen)| now.saturating_duration_since(**seen) >= timeout)
-                .map(|(name, _)| name.clone())
-                .collect()
-        };
-
-        let mut newly_stale = Vec::new();
-
-        if let Some(ref client) = self.client {
-            let _guard = self.node_op_lock.lock().await;
-            for name in &stale_names {
-                let key = node_etcd_key(name);
-                let resp = match client.clone().get(key.clone(), None).await {
-                    Ok(resp) => resp,
-                    Err(e) => {
-                        tracing::warn!(%name, %e, "sweep: failed to read node from etcd");
-                        continue;
-                    }
-                };
-                let Some(kv) = resp.kvs().first() else {
-                    continue;
-                };
-                let Ok(mut node) = Node::decode(kv.value()) else {
-                    continue;
-                };
-                if node.status == NodeStatus::NotReady as i32 {
-                    continue;
-                }
-                node.status = NodeStatus::NotReady as i32;
-                if let Err(e) = client.clone().put(key, node.encode_to_vec(), None).await {
-                    tracing::warn!(%name, %e, "sweep: failed to write node to etcd");
-                    continue;
-                }
-                newly_stale.push(node);
-            }
-        } else {
-            let mut nodes = self.nodes.write().await;
-            for name in &stale_names {
-                if let Some(node) = nodes.get_mut(name)
-                    && node.status != NodeStatus::NotReady as i32
-                {
-                    node.status = NodeStatus::NotReady as i32;
-                    newly_stale.push(node.clone());
-                }
-            }
-        }
-
-        for node in &newly_stale {
-            self.publish_node_event(WatchNodeEvent {
-                event_type: EventType::Modified as i32,
-                node: Some(node.clone()),
-            });
-        }
-
-        newly_stale.into_iter().map(|node| node.name).collect()
     }
 
     // Publish is fire-and-forget: a `send` error just means nobody is subscribed yet,
@@ -660,7 +754,7 @@ fn nodes_prefix() -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use proto::api::v1::watch_desired_state_event;
-    use proto::shared::v1::NodeStatus;
+    use proto::shared::v1::{NodeStatus, Resources};
 
     use super::*;
     use crate::test_support;
@@ -803,6 +897,156 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_set_node_status_publishes_modified() {
+        let store = Store::new();
+        store
+            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
+            .await
+            .unwrap();
+        let mut events = store.subscribe_node_events();
+
+        assert!(
+            store
+                .set_node_status("node-1", NodeStatus::NotReady)
+                .await
+                .unwrap()
+        );
+
+        let event = events.try_recv().expect("a node event should be published");
+        assert_eq!(event.event_type, EventType::Modified as i32);
+        assert_eq!(event.node.unwrap().status, NodeStatus::NotReady as i32);
+    }
+
+    #[tokio::test]
+    async fn test_set_node_status_is_a_noop_when_unchanged() {
+        let store = Store::new();
+        store
+            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
+            .await
+            .unwrap();
+        let mut events = store.subscribe_node_events();
+
+        assert!(
+            !store
+                .set_node_status("node-1", NodeStatus::Ready)
+                .await
+                .unwrap()
+        );
+        assert!(
+            events.try_recv().is_err(),
+            "an unchanged status must not publish an event"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_set_node_status_unknown_node_is_a_noop() {
+        let store = Store::new();
+        assert!(
+            !store
+                .set_node_status("ghost", NodeStatus::NotReady)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_register_node_first_seen_is_not_ready() {
+        let store = Store::new();
+        let mut events = store.subscribe_node_events();
+
+        store
+            .register_node(test_support::node("node-1", NodeStatus::Ready))
+            .await
+            .unwrap();
+
+        let event = events.try_recv().expect("a node event should be published");
+        assert_eq!(event.event_type, EventType::Added as i32);
+        assert_eq!(
+            event.node.unwrap().status,
+            NodeStatus::NotReady as i32,
+            "a node with no stream open isn't alive, whatever it reported"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_register_node_preserves_ready_status() {
+        let store = Store::new();
+        // Stands in for the node's stream having opened.
+        store
+            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
+            .await
+            .unwrap();
+
+        store
+            .register_node(test_support::node("node-1", NodeStatus::NotReady))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store.get_node("node-1").await.unwrap().map(|n| n.status),
+            Some(NodeStatus::Ready as i32),
+            "registration must not overwrite the status its own stream established"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_register_node_preserves_not_ready_status() {
+        let store = Store::new();
+        store
+            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::NotReady))
+            .await
+            .unwrap();
+
+        store
+            .register_node(test_support::node("node-1", NodeStatus::Ready))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store.get_node("node-1").await.unwrap().map(|n| n.status),
+            Some(NodeStatus::NotReady as i32)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_register_node_updates_capacity_and_allocatable() {
+        let store = Store::new();
+        store
+            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
+            .await
+            .unwrap();
+
+        let mut reported = test_support::node("node-1", NodeStatus::NotReady);
+        reported.capacity = Some(Resources {
+            cpu: 4000,
+            memory: 8192,
+        });
+        reported.allocatable = Some(Resources {
+            cpu: 3500,
+            memory: 7000,
+        });
+        store.register_node(reported).await.unwrap();
+
+        let stored = store.get_node("node-1").await.unwrap().unwrap();
+        assert_eq!(
+            stored.capacity,
+            Some(Resources {
+                cpu: 4000,
+                memory: 8192
+            }),
+            "the agent still owns the fields only it can observe"
+        );
+        assert_eq!(
+            stored.allocatable,
+            Some(Resources {
+                cpu: 3500,
+                memory: 7000
+            })
+        );
+        assert_eq!(stored.status, NodeStatus::Ready as i32);
+    }
+
+    #[tokio::test]
     async fn test_upsert_node_replaces_existing() {
         let store = Store::new();
         let mut events = store.subscribe_node_events();
@@ -919,94 +1163,6 @@ mod tests {
         assert!(
             node_b.try_recv().is_err(),
             "node-b should not receive an event published to node-a"
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_sweep_stale_nodes_marks_unresponsive_node_not_ready() {
-        let store = Store::new();
-        store
-            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
-            .await
-            .unwrap();
-        let mut events = store.subscribe_node_events();
-
-        tokio::time::advance(NODE_STALE_TIMEOUT + Duration::from_secs(1)).await;
-        let stale = store.sweep_stale_nodes(NODE_STALE_TIMEOUT).await;
-
-        assert_eq!(stale, vec!["node-1".to_string()]);
-        let node = store.get_node("node-1").await.unwrap().unwrap();
-        assert_eq!(node.status, NodeStatus::NotReady as i32);
-        let event = events
-            .try_recv()
-            .expect("a node MODIFIED event should have been published");
-        assert_eq!(event.event_type, EventType::Modified as i32);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_sweep_stale_nodes_marks_node_stale_at_exact_timeout() {
-        let store = Store::new();
-        store
-            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
-            .await
-            .unwrap();
-
-        tokio::time::advance(NODE_STALE_TIMEOUT).await;
-        let stale = store.sweep_stale_nodes(NODE_STALE_TIMEOUT).await;
-
-        assert_eq!(stale, vec!["node-1".to_string()]);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_sweep_stale_nodes_leaves_fresh_node_untouched() {
-        let store = Store::new();
-        store
-            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
-            .await
-            .unwrap();
-
-        tokio::time::advance(Duration::from_secs(1)).await;
-        let stale = store.sweep_stale_nodes(NODE_STALE_TIMEOUT).await;
-
-        assert!(stale.is_empty());
-        let node = store.get_node("node-1").await.unwrap().unwrap();
-        assert_eq!(node.status, NodeStatus::Ready as i32);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_upsert_and_publish_node_refreshes_liveness() {
-        let store = Store::new();
-        store
-            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
-            .await
-            .unwrap();
-
-        tokio::time::advance(NODE_STALE_TIMEOUT - Duration::from_secs(1)).await;
-        store
-            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
-            .await
-            .unwrap(); // heartbeat
-
-        tokio::time::advance(NODE_STALE_TIMEOUT - Duration::from_secs(1)).await;
-        let stale = store.sweep_stale_nodes(NODE_STALE_TIMEOUT).await;
-
-        assert!(stale.is_empty(), "recent heartbeat should keep node fresh");
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_sweep_stale_nodes_does_not_report_already_not_ready_node() {
-        let store = Store::new();
-        store
-            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::NotReady))
-            .await
-            .unwrap();
-
-        tokio::time::advance(NODE_STALE_TIMEOUT + Duration::from_secs(1)).await;
-        let stale = store.sweep_stale_nodes(NODE_STALE_TIMEOUT).await;
-
-        assert!(
-            stale.is_empty(),
-            "already-NotReady node shouldn't be reported as newly stale"
         );
     }
 }

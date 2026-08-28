@@ -8,6 +8,7 @@ mod test_support;
 mod validation;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use proto::api::v1::api_server_server::ApiServerServer;
 use tonic::transport::Server;
@@ -36,29 +37,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let client = etcd_client::Client::connect(&endpoints, None).await?;
         tracing::info!(?endpoints, "connected to etcd");
         let store = Arc::new(Store::new_with_etcd(client));
-        store.load_node_liveness().await?;
+        store.reset_node_liveness().await?;
         store
     } else {
         tracing::info!("running with in-memory store");
         Arc::new(Store::new())
     };
 
-    let liveness_store = store.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(store::HEARTBEAT_INTERVAL);
-        loop {
-            interval.tick().await;
-            liveness_store
-                .sweep_stale_nodes(store::NODE_STALE_TIMEOUT)
-                .await;
-        }
-    });
-
     let api_service = ApiService { store };
 
     tracing::info!(%addr, "API server starting");
 
     Server::builder()
+        .http2_keepalive_interval(Some(Duration::from_secs(10)))
+        .http2_keepalive_timeout(Some(Duration::from_secs(20)))
         .add_service(ApiServerServer::new(api_service))
         .serve_with_shutdown(addr, shutdown_signal())
         .await?;

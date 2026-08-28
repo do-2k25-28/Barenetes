@@ -1,5 +1,6 @@
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use proto::api::v1::api_server_server::ApiServer;
 use proto::api::v1::{
@@ -49,6 +50,54 @@ where
             ))
         })
     }))
+}
+
+/// Wraps an agent's desired-state stream so the node is marked NOT_READY once that
+/// stream ends. A dead node can't report its own death, so its silence is the signal.
+pub(crate) struct NodeLivenessGuard<S> {
+    inner: S,
+    store: Arc<Store>,
+    node_name: String,
+}
+
+impl<S> NodeLivenessGuard<S> {
+    pub(crate) fn new(inner: S, store: Arc<Store>, node_name: String) -> Self {
+        Self {
+            inner,
+            store,
+            node_name,
+        }
+    }
+}
+
+impl<S: Stream + Unpin> Stream for NodeLivenessGuard<S> {
+    type Item = S::Item;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<S::Item>> {
+        Pin::new(&mut self.get_mut().inner).poll_next(cx)
+    }
+}
+
+impl<S> Drop for NodeLivenessGuard<S> {
+    fn drop(&mut self) {
+        // Drop can't await, so hand the bookkeeping to the runtime. That means this can
+        // land after a replacement stream has already opened, which is why the store
+        // counts watchers rather than flipping the node's status directly.
+        let store = self.store.clone();
+        let node_name = std::mem::take(&mut self.node_name);
+
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(async move {
+                    store.node_watch_ended(&node_name).await;
+                });
+            }
+            Err(_) => tracing::warn!(
+                node = %node_name,
+                "watch dropped outside a runtime; node liveness not updated"
+            ),
+        }
+    }
 }
 
 // `allow(dead_code)` is temporary: no handler reads `self.store` yet since they're all `todo!()`
