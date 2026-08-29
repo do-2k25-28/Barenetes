@@ -27,6 +27,10 @@ pub enum Commands {
     /// List pods, optionally filtered by name/namespace/image
     #[command(name = "listPods")]
     ListPods(ListPodsArgs),
+
+    /// Delete a pod by name and optional namespace
+    #[command(name = "deletePod")]
+    DeletePod(DeletePodArgs),
 }
 
 #[derive(Args)]
@@ -92,6 +96,17 @@ pub struct ListPodsArgs {
     /// Only show pods with a container running this exact image
     #[arg(long)]
     pub image: Option<String>,
+}
+
+#[derive(Args)]
+pub struct DeletePodArgs {
+    /// Pod name
+    #[arg(long)]
+    pub name: String,
+
+    /// Pod namespace, optional (default value: "default")
+    #[arg(long, default_value = "default")]
+    pub namespace: String,
 }
 
 fn parse_port(raw: &str) -> Result<Port, String> {
