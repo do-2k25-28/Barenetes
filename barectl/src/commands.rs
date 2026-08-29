@@ -1,10 +1,13 @@
 use proto::api::v1::api_server_client::ApiServerClient;
-use proto::api::v1::{CreatePodRequest, DeletePodRequest, GetPodRequest, ListPodsRequest};
+use proto::api::v1::{
+    CreatePodRequest, DeletePodRequest, GetNodeRequest, GetPodRequest, ListPodsRequest,
+};
 use proto::shared::v1::{
-    Container, Pod, PodDetail, PodSpec, PodStatus, PodWithSpec, Protocol, Resources,
+    Container, Node, NodeStatus, Pod, PodDetail, PodSpec, PodStatus, PodWithSpec, Protocol,
+    Resources,
 };
 
-use crate::cli::{CreatePodArgs, DeletePodArgs, GetPodArgs, ListPodsArgs};
+use crate::cli::{CreatePodArgs, DeletePodArgs, GetNodeArgs, GetPodArgs, ListPodsArgs};
 use crate::error::CliError;
 
 pub async fn create_pod(server: &str, args: CreatePodArgs) -> Result<(), CliError> {
@@ -155,6 +158,40 @@ pub async fn list_pods(server: &str, args: ListPodsArgs) -> Result<(), CliError>
     }
 
     Ok(())
+}
+
+pub async fn get_node(server: &str, args: GetNodeArgs) -> Result<(), CliError> {
+    let mut client = ApiServerClient::connect(server.to_string())
+        .await
+        .map_err(|source| CliError::Connect {
+            addr: server.to_string(),
+            source,
+        })?;
+
+    let response = client
+        .get_node(GetNodeRequest {
+            name: args.name.clone(),
+        })
+        .await?;
+
+    match response.into_inner().node {
+        Some(node) => print_node(&node),
+        None => return Err(CliError::EmptyResponse),
+    }
+
+    Ok(())
+}
+
+fn print_node(node: &Node) {
+    let status = NodeStatus::try_from(node.status).unwrap_or(NodeStatus::NotReady);
+    println!("Name:        {}", node.name);
+    println!("Status:      {:?}", status);
+    if let Some(cap) = &node.capacity {
+        println!("Capacity:    cpu={}m, memory={}Mi", cap.cpu, cap.memory);
+    }
+    if let Some(alloc) = &node.allocatable {
+        println!("Allocatable: cpu={}m, memory={}Mi", alloc.cpu, alloc.memory);
+    }
 }
 
 fn matches_filters(pod: &PodDetail, args: &ListPodsArgs) -> bool {

@@ -24,6 +24,10 @@ pub enum Commands {
     #[command(name = "getPod")]
     GetPod(GetPodArgs),
 
+    /// Fetch a node by name
+    #[command(name = "getNode")]
+    GetNode(GetNodeArgs),
+
     /// List pods, optionally filtered by name/namespace/image
     #[command(name = "listPods")]
     ListPods(ListPodsArgs),
@@ -81,6 +85,12 @@ pub struct GetPodArgs {
     /// Namespace the pod is in
     #[arg(long, default_value = "default")]
     pub namespace: String,
+}
+
+#[derive(Args)]
+pub struct GetNodeArgs {
+    /// Node name
+    pub name: String,
 }
 
 #[derive(Args)]
