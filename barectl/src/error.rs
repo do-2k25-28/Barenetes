@@ -9,7 +9,7 @@ pub enum CliError {
         source: tonic::transport::Error,
     },
 
-    #[error("server returned no pod data for this request")]
+    #[error("api returned no resource for this request")]
     EmptyResponse,
 
     #[error("{message}")]
