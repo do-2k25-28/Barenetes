@@ -28,6 +28,7 @@ pub enum Commands {
     #[command(name = "listPods")]
     ListPods(ListPodsArgs),
 
+    /// Delete a pod by name and optional namespace
     #[command(name = "deletePod")]
     DeletePod(DeletePodArgs),
 }
@@ -99,9 +100,11 @@ pub struct ListPodsArgs {
 
 #[derive(Args)]
 pub struct DeletePodArgs {
+    /// Pod name
     #[arg(long)]
     pub name: String,
 
+    /// Pod namespace, optional (default value: "default")
     #[arg(long, default_value = "default")]
     pub namespace: String,
 }
