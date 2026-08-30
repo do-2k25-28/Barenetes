@@ -8,7 +8,9 @@ use proto::shared::v1::{
     Resources,
 };
 
-use crate::cli::{CreatePodArgs, DeletePodArgs, GetNodeArgs, GetPodArgs, ListNodesArgs, ListPodsArgs};
+use crate::cli::{
+    CreatePodArgs, DeletePodArgs, GetNodeArgs, GetPodArgs, ListNodesArgs, ListPodsArgs,
+};
 use crate::error::CliError;
 
 pub async fn create_pod(server: &str, args: CreatePodArgs) -> Result<(), CliError> {
@@ -217,7 +219,10 @@ pub async fn list_nodes(server: &str, _args: ListNodesArgs) -> Result<(), CliErr
     let mut nodes = nodes;
     nodes.sort_by(|a, b| a.name.cmp(&b.name));
 
-    println!("{:<20} {:<12} {:<12} {:<12}", "NAME", "STATUS", "CPU", "MEMORY");
+    println!(
+        "{:<20} {:<12} {:<12} {:<12}",
+        "NAME", "STATUS", "CPU", "MEMORY"
+    );
     for node in &nodes {
         let status = NodeStatus::try_from(node.status).unwrap_or(NodeStatus::NotReady);
         let cpu = node.capacity.as_ref().map_or(0, |r| r.cpu);
