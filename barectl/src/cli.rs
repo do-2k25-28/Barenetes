@@ -1,13 +1,11 @@
 use clap::{Args, Parser, Subcommand};
 use proto::shared::v1::{EnvVar, Port, Protocol};
 
-const DEFAULT_SERVER_ADDR: &str = "http://127.0.0.1:50052";
-
 #[derive(Parser)]
 #[command(name = "barectl", version, about = "Command-line client for Barenetes")]
 pub struct Cli {
-    /// Address of the API server (e.g. http://127.0.0.1:50052)
-    #[arg(long, global = true, env = "BARENETES_SERVER", default_value = DEFAULT_SERVER_ADDR)]
+    /// Address of the API server
+    #[arg(env = "BARENETES_SERVER", default_value = "http://127.0.0.1:50052")]
     pub server: String,
 
     #[command(subcommand)]
