@@ -7,10 +7,9 @@ use proto::shared::v1::{
     Container, Node, NodeStatus, Pod, PodDetail, PodSpec, PodStatus, PodWithSpec, Protocol,
     Resources,
 };
+use tonic::transport::Channel;
 
-use crate::cli::{
-    CreatePodArgs, DeletePodArgs, GetNodeArgs, GetPodArgs, ListNodesArgs, ListPodsArgs,
-};
+use crate::cli::{CreatePodArgs, DeletePodArgs, GetNodesArgs, GetPodArgs, ListPodsArgs};
 use crate::error::CliError;
 
 pub async fn create_pod(server: &str, args: CreatePodArgs) -> Result<(), CliError> {
@@ -163,19 +162,25 @@ pub async fn list_pods(server: &str, args: ListPodsArgs) -> Result<(), CliError>
     Ok(())
 }
 
-pub async fn get_node(server: &str, args: GetNodeArgs) -> Result<(), CliError> {
-    let mut client = ApiServerClient::connect(server.to_string())
+pub async fn get_nodes(server: &str, args: GetNodesArgs) -> Result<(), CliError> {
+    let client = ApiServerClient::connect(server.to_string())
         .await
         .map_err(|source| CliError::Connect {
             addr: server.to_string(),
             source,
         })?;
 
-    let response = client
-        .get_node(GetNodeRequest {
-            name: args.name.clone(),
-        })
-        .await?;
+    match args.name {
+        None => list_nodes(client).await,
+        Some(node_name) => get_one_node(client, node_name).await,
+    }
+}
+
+async fn get_one_node(
+    mut client: ApiServerClient<Channel>,
+    node_name: String,
+) -> Result<(), CliError> {
+    let response = client.get_node(GetNodeRequest { name: node_name }).await?;
 
     match response.into_inner().node {
         Some(node) => print_node(&node),
@@ -185,26 +190,7 @@ pub async fn get_node(server: &str, args: GetNodeArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-fn print_node(node: &Node) {
-    let status = NodeStatus::try_from(node.status).unwrap_or(NodeStatus::NotReady);
-    println!("Name:        {}", node.name);
-    println!("Status:      {:?}", status);
-    if let Some(cap) = &node.capacity {
-        println!("Capacity:    cpu={}m, memory={}Mi", cap.cpu, cap.memory);
-    }
-    if let Some(alloc) = &node.allocatable {
-        println!("Allocatable: cpu={}m, memory={}Mi", alloc.cpu, alloc.memory);
-    }
-}
-
-pub async fn list_nodes(server: &str, _args: ListNodesArgs) -> Result<(), CliError> {
-    let mut client = ApiServerClient::connect(server.to_string())
-        .await
-        .map_err(|source| CliError::Connect {
-            addr: server.to_string(),
-            source,
-        })?;
-
+async fn list_nodes(mut client: ApiServerClient<Channel>) -> Result<(), CliError> {
     let nodes = client
         .list_nodes(ListNodesRequest {})
         .await?
@@ -237,6 +223,18 @@ pub async fn list_nodes(server: &str, _args: ListNodesArgs) -> Result<(), CliErr
     }
 
     Ok(())
+}
+
+fn print_node(node: &Node) {
+    let status = NodeStatus::try_from(node.status).unwrap_or(NodeStatus::NotReady);
+    println!("Name:        {}", node.name);
+    println!("Status:      {:?}", status);
+    if let Some(cap) = &node.capacity {
+        println!("Capacity:    cpu={}m, memory={}Mi", cap.cpu, cap.memory);
+    }
+    if let Some(alloc) = &node.allocatable {
+        println!("Allocatable: cpu={}m, memory={}Mi", alloc.cpu, alloc.memory);
+    }
 }
 
 fn matches_filters(pod: &PodDetail, args: &ListPodsArgs) -> bool {

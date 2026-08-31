@@ -22,10 +22,6 @@ pub enum Commands {
     #[command(name = "getPod")]
     GetPod(GetPodArgs),
 
-    /// Fetch a node by name
-    #[command(name = "getNode")]
-    GetNode(GetNodeArgs),
-
     /// List pods, optionally filtered by name/namespace/image
     #[command(name = "listPods")]
     ListPods(ListPodsArgs),
@@ -34,9 +30,9 @@ pub enum Commands {
     #[command(name = "deletePod")]
     DeletePod(DeletePodArgs),
 
-    /// List all nodes with a simplified view
-    #[command(name = "listNodes")]
-    ListNodes(ListNodesArgs),
+    /// Fetch all nodes / one node by name
+    #[command(name = "getNodes")]
+    GetNodes(GetNodesArgs),
 }
 
 #[derive(Args)]
@@ -90,13 +86,10 @@ pub struct GetPodArgs {
 }
 
 #[derive(Args)]
-pub struct GetNodeArgs {
-    /// Node name
-    pub name: String,
+pub struct GetNodesArgs {
+    /// Name of a specific node for details
+    pub name: Option<String>,
 }
-
-#[derive(Args)]
-pub struct ListNodesArgs {}
 
 #[derive(Args)]
 pub struct ListPodsArgs {
