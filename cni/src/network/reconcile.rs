@@ -53,9 +53,6 @@ fn rebuild_ip_pools(pools: &IpPoolDirectory, live: &[WorkloadRecord]) -> io::Res
             .or_default()
             .insert(address);
     }
-    // A live record's pool directory should already exist (allocate() creates
-    // it), but a vlan directory can also outlive every workload that used it.
-    // Cover both so neither side leaks or gets skipped.
     let mut vlans: BTreeSet<u32> = allocated_by_vlan.keys().copied().collect();
     vlans.extend(pools.known_vlans()?.into_iter().map(u32::from));
     for vlan in vlans {
@@ -76,12 +73,6 @@ fn remove_orphan_interfaces(live: &[WorkloadRecord]) -> io::Result<()> {
     Ok(())
 }
 
-// A live veth says nothing about its VLAN sub-interface or per-tenant
-// MASQUERADE: those live in a separate netdev and in netfilter, and can be
-// wiped independently of the veth (e.g. `iptables -F`, or the sub-interface
-// deleted by hand) while the pod itself stays up. vlan::ensure is already
-// idempotent, so replaying it for every live tenant costs nothing when
-// there is nothing to repair.
 fn reinstall_vlan_networking(live: &[WorkloadRecord]) -> io::Result<()> {
     let node = super::node_id()?;
     let vlans: BTreeSet<u32> = live.iter().map(|record| record.vlan_id).collect();
@@ -100,12 +91,6 @@ fn reinstall_port_mappings(live: &[WorkloadRecord]) -> io::Result<()> {
     Ok(())
 }
 
-// `/sys/class/net` is pinned to the netns that mounted it, not to the
-// reader's current netns, so a plain fs read lies whenever the daemon
-// reached its netns via setns() without also getting a fresh sysfs mount
-// (exactly what `nsenter -n` does, and what cni/tests/integration.sh uses to
-// simulate nodes). Asking `ip` as a subprocess follows the daemon's actual
-// netns correctly.
 fn bridge_ports(bridge: &str) -> io::Result<Vec<String>> {
     let listing = output(IP, &["-o", "link", "show", "master", bridge])?;
     Ok(listing
