@@ -34,7 +34,6 @@ pub enum Commands {
 #[derive(Args)]
 pub struct CreatePodArgs {
     /// Pod name (also used as the container name)
-    #[arg(long)]
     pub name: String,
 
     /// Namespace to create the pod in
@@ -90,7 +89,6 @@ pub struct GetNodeArgs {
 #[derive(Args)]
 pub struct DeletePodArgs {
     /// Pod name
-    #[arg(long)]
     pub name: String,
 
     /// Pod namespace, optional
