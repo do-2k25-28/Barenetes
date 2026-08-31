@@ -1,13 +1,11 @@
 use clap::{Args, Parser, Subcommand};
 use proto::shared::v1::{EnvVar, Port, Protocol};
 
-const DEFAULT_SERVER_ADDR: &str = "http://127.0.0.1:50052";
-
 #[derive(Parser)]
 #[command(name = "barectl", version, about = "Command-line client for Barenetes")]
 pub struct Cli {
-    /// Address of the API server (e.g. http://127.0.0.1:50052)
-    #[arg(long, global = true, env = "BARENETES_SERVER", default_value = DEFAULT_SERVER_ADDR)]
+    /// Address of the API server
+    #[arg(env = "BARENETES_SERVER", default_value = "http://127.0.0.1:50052")]
     pub server: String,
 
     #[command(subcommand)]
@@ -20,47 +18,38 @@ pub enum Commands {
     #[command(name = "createPod")]
     CreatePod(CreatePodArgs),
 
-    /// Fetch a pod by name
+    /// List pods validating filters
     #[command(name = "getPod")]
     GetPod(GetPodArgs),
-
-    /// Fetch a node by name
-    #[command(name = "getNode")]
-    GetNode(GetNodeArgs),
-
-    /// List pods, optionally filtered by name/namespace/image
-    #[command(name = "listPods")]
-    ListPods(ListPodsArgs),
 
     /// Delete a pod by name and optional namespace
     #[command(name = "deletePod")]
     DeletePod(DeletePodArgs),
 
-    /// List all nodes with a simplified view
-    #[command(name = "listNodes")]
-    ListNodes(ListNodesArgs),
+    /// Fetch all nodes / one node by name
+    #[command(name = "getNode")]
+    GetNode(GetNodeArgs),
 }
 
 #[derive(Args)]
 pub struct CreatePodArgs {
     /// Pod name (also used as the container name)
-    #[arg(long)]
     pub name: String,
 
     /// Namespace to create the pod in
-    #[arg(long, default_value = "default")]
+    #[arg(short, long, default_value = "default")]
     pub namespace: String,
 
     /// Container image (OCI reference)
-    #[arg(long)]
+    #[arg(short, long)]
     pub image: String,
 
     /// Exposed port, format HOST:CONTAINER[/tcp|udp] (repeatable)
-    #[arg(long = "port", value_parser = parse_port)]
+    #[arg(short, long = "port", value_parser = parse_port)]
     pub ports: Vec<Port>,
 
     /// Environment variable, format KEY=VALUE (repeatable)
-    #[arg(long = "env", value_parser = parse_env)]
+    #[arg(short, long = "env", value_parser = parse_env)]
     pub env: Vec<EnvVar>,
 
     /// CPU request in milli-cpu (e.g. 250 = 0.25 core)
@@ -82,47 +71,31 @@ pub struct CreatePodArgs {
 
 #[derive(Args)]
 pub struct GetPodArgs {
-    /// Pod name
-    #[arg(long)]
-    pub name: String,
+    /// Filter over pod name ; if only 1 is returned, display details
+    pub name: Option<String>,
 
-    /// Namespace the pod is in
-    #[arg(long, default_value = "default")]
-    pub namespace: String,
+    /// Filter over namespace ; combine with pod name to always have 0 or 1 result
+    #[arg(long, short)]
+    pub namespace: Option<String>,
+
+    /// Filter over container image
+    #[arg(long, short)]
+    pub image: Option<String>,
 }
 
 #[derive(Args)]
 pub struct GetNodeArgs {
-    /// Node name
-    pub name: String,
-}
-
-#[derive(Args)]
-pub struct ListNodesArgs {}
-
-#[derive(Args)]
-pub struct ListPodsArgs {
-    /// Only show the pod with this exact name
-    #[arg(long)]
+    /// Name of a specific node for details
     pub name: Option<String>,
-
-    /// Only show pods in this exact namespace
-    #[arg(long)]
-    pub namespace: Option<String>,
-
-    /// Only show pods with a container running this exact image
-    #[arg(long)]
-    pub image: Option<String>,
 }
 
 #[derive(Args)]
 pub struct DeletePodArgs {
     /// Pod name
-    #[arg(long)]
     pub name: String,
 
     /// Pod namespace, optional
-    #[arg(long, default_value = "default")]
+    #[arg(long, short, default_value = "default")]
     pub namespace: String,
 }
 
