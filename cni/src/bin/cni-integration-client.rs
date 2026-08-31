@@ -4,6 +4,7 @@ use proto::cni::v1::{
     AddWorkloadNetworkRequest, DeleteWorkloadNetworkRequest, GetWorkloadNetworkRequest, NetworkRef,
     WorkloadRef,
 };
+use proto::shared::v1::{Port, Protocol};
 use std::env;
 use tokio::net::UnixStream;
 use tonic::transport::{Channel, Endpoint, Uri};
@@ -49,13 +50,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match action.as_str() {
         "add" => {
             let netns_path = netns.ok_or("netns manquant pour ADD")?;
+            let port_mappings = args
+                .next()
+                .map(|spec| parse_port_mapping(&spec))
+                .transpose()?
+                .into_iter()
+                .collect();
             client
                 .add_workload_network(AddWorkloadNetworkRequest {
                     workload: Some(workload),
                     network: Some(network_ref),
                     netns_path,
                     interface_name: "eth0".into(),
-                    port_mappings: Vec::new(),
+                    port_mappings,
                 })
                 .await?;
         }
@@ -78,4 +85,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => return Err("action attendue: add, get ou delete".into()),
     }
     Ok(())
+}
+
+// Optionnel sur ADD : "<port_externe>:<port_interne>", toujours TCP.
+fn parse_port_mapping(spec: &str) -> Result<Port, Box<dyn std::error::Error>> {
+    let (external, internal) = spec
+        .split_once(':')
+        .ok_or("format attendu pour le port mapping: <port_externe>:<port_interne>")?;
+    Ok(Port {
+        external: external.parse()?,
+        internal: internal.parse()?,
+        protocol: Protocol::Tcp as i32,
+    })
 }

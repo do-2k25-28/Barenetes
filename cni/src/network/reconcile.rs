@@ -3,7 +3,7 @@ use std::io;
 use std::net::Ipv4Addr;
 
 use super::bridge::BRIDGE_NAME;
-use super::system::{run, succeeds};
+use super::system::{output, run, succeeds};
 use crate::ip_pool::IpPoolDirectory;
 use crate::state::{StateStore, WorkloadRecord};
 
@@ -30,6 +30,7 @@ fn drop_stale_records(state: &StateStore) -> io::Result<Vec<WorkloadRecord>> {
                 record.network_name,
                 record.host_interface
             );
+            super::firewall::delete_mappings(&record.ip_address, &record.port_mappings)?;
             state.delete(
                 &record.workload_name,
                 &record.instance_name,
@@ -78,15 +79,20 @@ fn reinstall_port_mappings(live: &[WorkloadRecord]) -> io::Result<()> {
     Ok(())
 }
 
+// `/sys/class/net` is pinned to the netns that mounted it, not to the
+// reader's current netns, so a plain fs read lies whenever the daemon
+// reached its netns via setns() without also getting a fresh sysfs mount
+// (exactly what `nsenter -n` does, and what cni/tests/integration.sh uses to
+// simulate nodes). Asking `ip` as a subprocess follows the daemon's actual
+// netns correctly.
 fn bridge_ports(bridge: &str) -> io::Result<Vec<String>> {
-    let path = format!("/sys/class/net/{bridge}/brif");
-    match std::fs::read_dir(&path) {
-        Ok(entries) => entries
-            .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
-            .collect(),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(error) => Err(error),
-    }
+    let listing = output(IP, &["-o", "link", "show", "master", bridge])?;
+    Ok(listing
+        .lines()
+        .filter_map(|line| line.split(':').nth(1))
+        .map(|name| name.trim().split('@').next().unwrap_or("").to_string())
+        .filter(|name| !name.is_empty())
+        .collect())
 }
 
 fn is_workload_interface(name: &str) -> bool {
