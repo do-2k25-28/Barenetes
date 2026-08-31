@@ -38,19 +38,19 @@ pub struct CreatePodArgs {
     pub name: String,
 
     /// Namespace to create the pod in
-    #[arg(long, default_value = "default")]
+    #[arg(short, long, default_value = "default")]
     pub namespace: String,
 
     /// Container image (OCI reference)
-    #[arg(long)]
+    #[arg(short, long)]
     pub image: String,
 
     /// Exposed port, format HOST:CONTAINER[/tcp|udp] (repeatable)
-    #[arg(long = "port", value_parser = parse_port)]
+    #[arg(short, long = "port", value_parser = parse_port)]
     pub ports: Vec<Port>,
 
     /// Environment variable, format KEY=VALUE (repeatable)
-    #[arg(long = "env", value_parser = parse_env)]
+    #[arg(short, long = "env", value_parser = parse_env)]
     pub env: Vec<EnvVar>,
 
     /// CPU request in milli-cpu (e.g. 250 = 0.25 core)
@@ -74,10 +74,10 @@ pub struct CreatePodArgs {
 pub struct GetPodArgs {
     pub name: Option<String>,
 
-    #[arg(long)]
+    #[arg(long, short)]
     pub namespace: Option<String>,
 
-    #[arg(long)]
+    #[arg(long, short)]
     pub image: Option<String>,
 }
 
@@ -94,7 +94,7 @@ pub struct DeletePodArgs {
     pub name: String,
 
     /// Pod namespace, optional
-    #[arg(long, default_value = "default")]
+    #[arg(long, short, default_value = "default")]
     pub namespace: String,
 }
 
