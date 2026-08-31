@@ -1,13 +1,16 @@
 use proto::api::v1::api_server_client::ApiServerClient;
 use proto::api::v1::{
-    CreatePodRequest, DeletePodRequest, GetNodeRequest, GetPodRequest, ListPodsRequest,
+    CreatePodRequest, DeletePodRequest, GetNodeRequest, GetPodRequest, ListNodesRequest,
+    ListPodsRequest,
 };
 use proto::shared::v1::{
     Container, Node, NodeStatus, Pod, PodDetail, PodSpec, PodStatus, PodWithSpec, Protocol,
     Resources,
 };
 
-use crate::cli::{CreatePodArgs, DeletePodArgs, GetNodeArgs, GetPodArgs, ListPodsArgs};
+use crate::cli::{
+    CreatePodArgs, DeletePodArgs, GetNodeArgs, GetPodArgs, ListNodesArgs, ListPodsArgs,
+};
 use crate::error::CliError;
 
 pub async fn create_pod(server: &str, args: CreatePodArgs) -> Result<(), CliError> {
@@ -192,6 +195,48 @@ fn print_node(node: &Node) {
     if let Some(alloc) = &node.allocatable {
         println!("Allocatable: cpu={}m, memory={}Mi", alloc.cpu, alloc.memory);
     }
+}
+
+pub async fn list_nodes(server: &str, _args: ListNodesArgs) -> Result<(), CliError> {
+    let mut client = ApiServerClient::connect(server.to_string())
+        .await
+        .map_err(|source| CliError::Connect {
+            addr: server.to_string(),
+            source,
+        })?;
+
+    let nodes = client
+        .list_nodes(ListNodesRequest {})
+        .await?
+        .into_inner()
+        .nodes;
+
+    if nodes.is_empty() {
+        println!("No nodes found.");
+        return Ok(());
+    }
+
+    let mut nodes = nodes;
+    nodes.sort_by(|a, b| a.name.cmp(&b.name));
+
+    println!(
+        "{:<20} {:<12} {:<12} {:<12}",
+        "NAME", "STATUS", "CPU", "MEMORY"
+    );
+    for node in &nodes {
+        let status = NodeStatus::try_from(node.status).unwrap_or(NodeStatus::NotReady);
+        let cpu = node.capacity.as_ref().map_or(0, |r| r.cpu);
+        let mem = node.capacity.as_ref().map_or(0, |r| r.memory);
+        println!(
+            "{:<20} {:<12} {:<12} {:<12}",
+            node.name,
+            format!("{:?}", status),
+            format!("{}m", cpu),
+            format!("{}Mi", mem),
+        );
+    }
+
+    Ok(())
 }
 
 fn matches_filters(pod: &PodDetail, args: &ListPodsArgs) -> bool {
