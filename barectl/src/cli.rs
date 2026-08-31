@@ -71,11 +71,14 @@ pub struct CreatePodArgs {
 
 #[derive(Args)]
 pub struct GetPodArgs {
+    /// Filter over pod name ; if only 1 is returned, display details
     pub name: Option<String>,
 
+    /// Filter over namespace ; combine with pod name to always have 0 or 1 result
     #[arg(long, short)]
     pub namespace: Option<String>,
 
+    /// Filter over container image
     #[arg(long, short)]
     pub image: Option<String>,
 }
