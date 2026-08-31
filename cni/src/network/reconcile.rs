@@ -13,6 +13,7 @@ pub(crate) fn reconcile(pools: &IpPoolDirectory, state: &StateStore) -> io::Resu
     let live = drop_stale_records(state)?;
     rebuild_ip_pools(pools, &live)?;
     remove_orphan_interfaces(&live)?;
+    reinstall_vlan_networking(&live)?;
     reinstall_port_mappings(&live)?;
     Ok(())
 }
@@ -52,11 +53,14 @@ fn rebuild_ip_pools(pools: &IpPoolDirectory, live: &[WorkloadRecord]) -> io::Res
             .or_default()
             .insert(address);
     }
-    for vlan in pools.known_vlans()? {
-        let allocated = allocated_by_vlan
-            .remove(&u32::from(vlan))
-            .unwrap_or_default();
-        pools.pool(u32::from(vlan))?.reset(allocated)?;
+    // A live record's pool directory should already exist (allocate() creates
+    // it), but a vlan directory can also outlive every workload that used it.
+    // Cover both so neither side leaks or gets skipped.
+    let mut vlans: BTreeSet<u32> = allocated_by_vlan.keys().copied().collect();
+    vlans.extend(pools.known_vlans()?.into_iter().map(u32::from));
+    for vlan in vlans {
+        let allocated = allocated_by_vlan.remove(&vlan).unwrap_or_default();
+        pools.pool(vlan)?.reset(allocated)?;
     }
     Ok(())
 }
@@ -68,6 +72,23 @@ fn remove_orphan_interfaces(live: &[WorkloadRecord]) -> io::Result<()> {
             eprintln!("cni: removing orphan interface {port}");
             run(IP, &["link", "delete", &port])?;
         }
+    }
+    Ok(())
+}
+
+// A live veth says nothing about its VLAN sub-interface or per-tenant
+// MASQUERADE: those live in a separate netdev and in netfilter, and can be
+// wiped independently of the veth (e.g. `iptables -F`, or the sub-interface
+// deleted by hand) while the pod itself stays up. vlan::ensure is already
+// idempotent, so replaying it for every live tenant costs nothing when
+// there is nothing to repair.
+fn reinstall_vlan_networking(live: &[WorkloadRecord]) -> io::Result<()> {
+    let node = super::node_id()?;
+    let vlans: BTreeSet<u32> = live.iter().map(|record| record.vlan_id).collect();
+    for vlan in vlans {
+        let vlan = u8::try_from(vlan)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "stored vlan_id is invalid"))?;
+        super::vlan::ensure(vlan, node)?;
     }
     Ok(())
 }
@@ -113,5 +134,55 @@ mod tests {
         assert!(!is_workload_interface("barenetes-vx"));
         assert!(!is_workload_interface("v3f9a2b1c4"));
         assert!(!is_workload_interface("v3f9a2b1c4dz"));
+    }
+
+    fn record(vlan_id: u32, ip_address: &str) -> WorkloadRecord {
+        WorkloadRecord {
+            workload_name: "api".into(),
+            instance_name: "api-1".into(),
+            network_name: "tenant-a".into(),
+            host_interface: "v123".into(),
+            interface_name: "eth0".into(),
+            ip_address: ip_address.into(),
+            gateway: "10.100.1.1".into(),
+            vlan_id,
+            port_mappings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn rebuild_ip_pools_covers_a_live_vlan_missing_its_pool_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let pools = IpPoolDirectory::new(directory.path(), 1);
+        let live = vec![record(100, "10.100.1.5")];
+
+        rebuild_ip_pools(&pools, &live).unwrap();
+
+        assert_eq!(pools.known_vlans().unwrap(), vec![100]);
+        let released = pools
+            .pool(100)
+            .unwrap()
+            .release(Ipv4Addr::new(10, 100, 1, 5))
+            .unwrap();
+        assert!(
+            released,
+            "the live address should have been marked allocated"
+        );
+    }
+
+    #[test]
+    fn rebuild_ip_pools_clears_a_known_vlan_with_no_live_records() {
+        let directory = tempfile::tempdir().unwrap();
+        let pools = IpPoolDirectory::new(directory.path(), 1);
+        pools.pool(200).unwrap().allocate().unwrap();
+
+        rebuild_ip_pools(&pools, &[]).unwrap();
+
+        let released = pools
+            .pool(200)
+            .unwrap()
+            .release(Ipv4Addr::new(10, 200, 1, 2))
+            .unwrap();
+        assert!(!released, "the leaked address should have been cleared");
     }
 }
