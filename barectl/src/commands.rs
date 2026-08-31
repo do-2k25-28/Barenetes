@@ -12,25 +12,16 @@ use crate::cli::{
     CreatePodArgs, DeletePodArgs, GetNodeArgs, GetPodArgs, ListNodesArgs, ListPodsArgs,
 };
 use crate::error::CliError;
+use crate::manifest::PodManifest;
 
 pub async fn create_pod(server: &str, args: CreatePodArgs) -> Result<(), CliError> {
-    let pod = PodWithSpec {
-        pod: Some(Pod {
-            name: args.name.clone(),
-            status: PodStatus::Pending as i32,
-            requests: resources(args.cpu_request, args.memory_request),
-            limits: resources(args.cpu_limit, args.memory_limit),
-        }),
-        spec: Some(PodSpec {
-            namespace: args.namespace.clone(),
-            containers: vec![Container {
-                name: args.name.clone(),
-                image: args.image,
-                ports: args.ports,
-                env: args.env,
-            }],
-        }),
-    };
+    let pod = build_pod(args)?;
+    let name = pod.pod.as_ref().map(|p| p.name.clone()).unwrap_or_default();
+    let namespace = pod
+        .spec
+        .as_ref()
+        .map(|s| s.namespace.clone())
+        .unwrap_or_default();
 
     let mut client = ApiServerClient::connect(server.to_string())
         .await
@@ -42,11 +33,57 @@ pub async fn create_pod(server: &str, args: CreatePodArgs) -> Result<(), CliErro
         .create_pod(CreatePodRequest { pod: Some(pod) })
         .await?;
 
-    println!(
-        "pod/{} created in namespace \"{}\"",
-        args.name, args.namespace
-    );
+    println!("pod/{name} created in namespace \"{namespace}\"");
     Ok(())
+}
+
+/// Builds the pod either from `--file` (a YAML manifest) or from the flat
+/// flags — the two are mutually exclusive, see `CreatePodArgs`.
+fn build_pod(args: CreatePodArgs) -> Result<PodWithSpec, CliError> {
+    let flags_used = args.name.is_some()
+        || args.namespace.is_some()
+        || args.image.is_some()
+        || !args.ports.is_empty()
+        || !args.env.is_empty()
+        || args.cpu_request.is_some()
+        || args.memory_request.is_some()
+        || args.cpu_limit.is_some()
+        || args.memory_limit.is_some();
+
+    if let Some(path) = args.file {
+        if flags_used {
+            return Err(CliError::InvalidUsage(
+                "--file cannot be combined with --name/--namespace/--image/--port/--env/resource flags".to_string(),
+            ));
+        }
+        return PodManifest::from_file(&path)?.try_into();
+    }
+
+    let name = args.name.ok_or_else(|| {
+        CliError::InvalidUsage("--name is required unless --file is used".to_string())
+    })?;
+    let image = args.image.ok_or_else(|| {
+        CliError::InvalidUsage("--image is required unless --file is used".to_string())
+    })?;
+    let namespace = args.namespace.unwrap_or_else(|| "default".to_string());
+
+    Ok(PodWithSpec {
+        pod: Some(Pod {
+            name: name.clone(),
+            status: PodStatus::Pending as i32,
+            requests: resources(args.cpu_request, args.memory_request),
+            limits: resources(args.cpu_limit, args.memory_limit),
+        }),
+        spec: Some(PodSpec {
+            namespace,
+            containers: vec![Container {
+                name,
+                image,
+                ports: args.ports,
+                env: args.env,
+            }],
+        }),
+    })
 }
 
 fn resources(cpu: Option<i32>, memory: Option<i32>) -> Option<Resources> {
