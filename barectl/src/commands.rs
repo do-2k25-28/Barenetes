@@ -1,7 +1,6 @@
 use proto::api::v1::api_server_client::ApiServerClient;
 use proto::api::v1::{
-    CreatePodRequest, DeletePodRequest, GetNodeRequest, ListNodesRequest,
-    ListPodsRequest,
+    CreatePodRequest, DeletePodRequest, GetNodeRequest, ListNodesRequest, ListPodsRequest,
 };
 use proto::shared::v1::{
     Container, Node, NodeStatus, Pod, PodDetail, PodSpec, PodStatus, PodWithSpec, Protocol,
