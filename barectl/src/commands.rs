@@ -1,6 +1,6 @@
 use proto::api::v1::api_server_client::ApiServerClient;
 use proto::api::v1::{
-    CreatePodRequest, DeletePodRequest, GetNodeRequest, GetPodRequest, ListNodesRequest,
+    CreatePodRequest, DeletePodRequest, GetNodeRequest, ListNodesRequest,
     ListPodsRequest,
 };
 use proto::shared::v1::{
@@ -9,7 +9,7 @@ use proto::shared::v1::{
 };
 use tonic::transport::Channel;
 
-use crate::cli::{CreatePodArgs, DeletePodArgs, GetNodeArgs, GetPodArgs, ListPodsArgs};
+use crate::cli::{CreatePodArgs, DeletePodArgs, GetNodeArgs, GetPodArgs};
 use crate::error::CliError;
 
 pub async fn create_pod(server: &str, args: CreatePodArgs) -> Result<(), CliError> {
@@ -66,16 +66,47 @@ pub async fn get_pod(server: &str, args: GetPodArgs) -> Result<(), CliError> {
             source,
         })?;
 
-    let response = client
-        .get_pod(GetPodRequest {
-            name: args.name,
-            namespace: args.namespace,
-        })
-        .await?;
+    let response = client.list_pods(ListPodsRequest {}).await?;
+    let mut pods = response.into_inner().pods;
+    pods.retain(|pod| matches_filters(pod, &args));
 
-    match response.into_inner().pod {
-        Some(pod) => print_pod(&pod),
-        None => return Err(CliError::EmptyResponse),
+    if pods.is_empty() {
+        println!("0 pods returned.");
+        return Ok(());
+    }
+
+    // if there's only 1 pod and the request specified a name, display details
+    if pods.len() == 1 {
+        match &args.name {
+            None => {}
+            Some(_) => {
+                print_pod(&pods[0]);
+                return Ok(());
+            }
+        }
+    }
+
+    pods.sort_by(|a, b| (pod_namespace(a), pod_name(a)).cmp(&(pod_namespace(b), pod_name(b))));
+
+    println!(
+        "{:<15} {:<12} {:<10} {:<15} IMAGE",
+        "NAME", "NAMESPACE", "STATUS", "NODE"
+    );
+    for pod in &pods {
+        let images = pod_containers(pod)
+            .iter()
+            .map(|c| c.image.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        let status = format!("{:?}", pod_status(pod));
+        println!(
+            "{:<15} {:<12} {:<10} {:<15} {}",
+            pod_name(pod),
+            pod_namespace(pod),
+            status,
+            or_none(&pod.node_name),
+            images
+        );
     }
 
     Ok(())
@@ -111,55 +142,6 @@ fn pod_containers(pod: &PodDetail) -> &[Container] {
         .and_then(|c| c.spec.as_ref())
         .map(|s| s.containers.as_slice())
         .unwrap_or_default()
-}
-
-pub async fn list_pods(server: &str, args: ListPodsArgs) -> Result<(), CliError> {
-    let mut client = ApiServerClient::connect(server.to_string())
-        .await
-        .map_err(|source| CliError::Connect {
-            addr: server.to_string(),
-            source,
-        })?;
-
-    let response = client.list_pods(ListPodsRequest {}).await?;
-    let mut pods = response.into_inner().pods;
-
-    if pods.is_empty() {
-        println!("No pods found.");
-        return Ok(());
-    }
-
-    pods.retain(|pod| matches_filters(pod, &args));
-
-    if pods.is_empty() {
-        println!("No pods match the given filters.");
-        return Ok(());
-    }
-
-    pods.sort_by(|a, b| (pod_namespace(a), pod_name(a)).cmp(&(pod_namespace(b), pod_name(b))));
-
-    println!(
-        "{:<15} {:<12} {:<10} {:<15} IMAGE",
-        "NAME", "NAMESPACE", "STATUS", "NODE"
-    );
-    for pod in &pods {
-        let images = pod_containers(pod)
-            .iter()
-            .map(|c| c.image.as_str())
-            .collect::<Vec<_>>()
-            .join(",");
-        let status = format!("{:?}", pod_status(pod));
-        println!(
-            "{:<15} {:<12} {:<10} {:<15} {}",
-            pod_name(pod),
-            pod_namespace(pod),
-            status,
-            or_none(&pod.node_name),
-            images
-        );
-    }
-
-    Ok(())
 }
 
 pub async fn get_node(server: &str, args: GetNodeArgs) -> Result<(), CliError> {
@@ -237,7 +219,7 @@ fn print_node(node: &Node) {
     }
 }
 
-fn matches_filters(pod: &PodDetail, args: &ListPodsArgs) -> bool {
+fn matches_filters(pod: &PodDetail, args: &GetPodArgs) -> bool {
     if let Some(name) = &args.name
         && pod_name(pod) != name
     {

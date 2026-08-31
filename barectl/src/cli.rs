@@ -18,13 +18,9 @@ pub enum Commands {
     #[command(name = "createPod")]
     CreatePod(CreatePodArgs),
 
-    /// Fetch a pod by name
+    /// List pods validating filters
     #[command(name = "getPod")]
     GetPod(GetPodArgs),
-
-    /// List pods, optionally filtered by name/namespace/image
-    #[command(name = "listPods")]
-    ListPods(ListPodsArgs),
 
     /// Delete a pod by name and optional namespace
     #[command(name = "deletePod")]
@@ -76,34 +72,19 @@ pub struct CreatePodArgs {
 
 #[derive(Args)]
 pub struct GetPodArgs {
-    /// Pod name
-    #[arg(long)]
-    pub name: String,
+    pub name: Option<String>,
 
-    /// Namespace the pod is in
-    #[arg(long, default_value = "default")]
-    pub namespace: String,
+    #[arg(long)]
+    pub namespace: Option<String>,
+
+    #[arg(long)]
+    pub image: Option<String>,
 }
 
 #[derive(Args)]
 pub struct GetNodeArgs {
     /// Name of a specific node for details
     pub name: Option<String>,
-}
-
-#[derive(Args)]
-pub struct ListPodsArgs {
-    /// Only show the pod with this exact name
-    #[arg(long)]
-    pub name: Option<String>,
-
-    /// Only show pods in this exact namespace
-    #[arg(long)]
-    pub namespace: Option<String>,
-
-    /// Only show pods with a container running this exact image
-    #[arg(long)]
-    pub image: Option<String>,
 }
 
 #[derive(Args)]
