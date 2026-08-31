@@ -46,7 +46,7 @@ pub enum Commands {
 #[derive(Args)]
 pub struct CreatePodArgs {
     /// Create the pod from a YAML manifest file, instead of the flags below
-    #[arg(short, long, value_name = "FILE")]
+    #[arg(short, long)]
     pub file: Option<PathBuf>,
 
     /// Pod name (also used as the container name); required unless --file is used
