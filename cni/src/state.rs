@@ -118,6 +118,23 @@ impl StateStore {
         }
         Ok(false)
     }
+
+    pub(crate) fn records(&self) -> io::Result<Vec<WorkloadRecord>> {
+        let entries = match std::fs::read_dir(&self.directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+        let mut records = Vec::new();
+        for entry in entries {
+            let path = entry?.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            records.push(read_record(File::open(path)?)?);
+        }
+        Ok(records)
+    }
 }
 
 fn read_record(file: File) -> io::Result<WorkloadRecord> {
@@ -187,5 +204,26 @@ mod tests {
     #[test]
     fn stable_ids_include_part_boundaries() {
         assert_ne!(stable_id(&["ab", "c"]), stable_id(&["a", "bc"]));
+    }
+
+    #[test]
+    fn records_lists_every_saved_workload() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = StateStore::new(directory.path());
+        assert!(store.records().unwrap().is_empty());
+
+        let mut second = record();
+        second.instance_name = "api-2".into();
+        store.save(&record()).unwrap();
+        store.save(&second).unwrap();
+
+        let mut instances: Vec<_> = store
+            .records()
+            .unwrap()
+            .into_iter()
+            .map(|record| record.instance_name)
+            .collect();
+        instances.sort();
+        assert_eq!(instances, vec!["api-1", "api-2"]);
     }
 }
