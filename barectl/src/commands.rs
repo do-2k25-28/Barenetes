@@ -9,7 +9,7 @@ use proto::shared::v1::{
 };
 use tonic::transport::Channel;
 
-use crate::cli::{CreatePodArgs, DeletePodArgs, GetNodesArgs, GetPodArgs, ListPodsArgs};
+use crate::cli::{CreatePodArgs, DeletePodArgs, GetNodeArgs, GetPodArgs, ListPodsArgs};
 use crate::error::CliError;
 
 pub async fn create_pod(server: &str, args: CreatePodArgs) -> Result<(), CliError> {
@@ -162,7 +162,7 @@ pub async fn list_pods(server: &str, args: ListPodsArgs) -> Result<(), CliError>
     Ok(())
 }
 
-pub async fn get_nodes(server: &str, args: GetNodesArgs) -> Result<(), CliError> {
+pub async fn get_node(server: &str, args: GetNodeArgs) -> Result<(), CliError> {
     let client = ApiServerClient::connect(server.to_string())
         .await
         .map_err(|source| CliError::Connect {

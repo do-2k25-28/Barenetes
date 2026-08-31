@@ -31,8 +31,8 @@ pub enum Commands {
     DeletePod(DeletePodArgs),
 
     /// Fetch all nodes / one node by name
-    #[command(name = "getNodes")]
-    GetNodes(GetNodesArgs),
+    #[command(name = "getNode")]
+    GetNode(GetNodeArgs),
 }
 
 #[derive(Args)]
@@ -86,7 +86,7 @@ pub struct GetPodArgs {
 }
 
 #[derive(Args)]
-pub struct GetNodesArgs {
+pub struct GetNodeArgs {
     /// Name of a specific node for details
     pub name: Option<String>,
 }
