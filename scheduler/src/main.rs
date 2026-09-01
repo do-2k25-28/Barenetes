@@ -110,6 +110,15 @@ async fn watch_pods(
             continue;
         }
 
+        // Only a brand-new pod triggers scheduling here. AssignPod's
+        // unschedulable-reason path itself publishes a Modified event with
+        // node_name still empty, so reacting to Modified here would make the
+        // scheduler retry-loop against its own writes forever; retries for
+        // already-pending pods happen from watch_nodes instead.
+        if event_type != EventType::Added {
+            continue;
+        }
+
         try_schedule(&mut client, &state, &namespace, &pod.name, &pod).await?;
     }
 
