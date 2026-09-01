@@ -77,7 +77,6 @@ Barenetes/
 └── proto/          # Protobuf definitions
     ├── agent/v1/
     ├── api/v1/
-    ├── barectl/v1/
     ├── cni/v1/
     └── scheduler/v1/
 ```
