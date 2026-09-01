@@ -11,6 +11,7 @@ DAEMON_PIDS=()
 NODE_HOST_LINKS=()
 NODE_SOCKETS=()
 NODE_STATES=()
+NODE_NETNS_PIDS=()
 LAST_NETNS_PID=
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -101,6 +102,7 @@ start_node() {
     DAEMON_PIDS+=("$!")
     NODE_SOCKETS[$node_id]="$socket"
     NODE_STATES[$node_id]="$state"
+    NODE_NETNS_PIDS[$node_id]="$pid"
     for _ in $(seq 1 50); do
         [[ -S "$socket" ]] && break
         kill -0 "${DAEMON_PIDS[-1]}" 2>/dev/null || { cat "$log" >&2; fail "daemon du nœud $node_id arrêté"; }
@@ -110,14 +112,49 @@ start_node() {
     nsenter -t "$pid" -n iptables -P FORWARD DROP
 }
 
+# Redémarre uniquement le daemon d'un nœud déjà en place (son netns, son
+# bridge, ses veth restent vivants) : c'est le scénario "crash sur un système
+# vivant" que reconcile() doit couvrir, distinct d'un reboot complet déjà
+# couvert par ailleurs. daemon_index doit pointer sur l'entrée de DAEMON_PIDS
+# créée par le start_node correspondant.
+restart_node_daemon() {
+    local node_id=$1 node_ip=$2 remote_ip=$3 daemon_index=$4
+    local pid=${NODE_NETNS_PIDS[$node_id]}
+    local socket=${NODE_SOCKETS[$node_id]}
+    local state=${NODE_STATES[$node_id]}
+    local log="$TMP_DIR/cni-node-${node_id}-restart.log"
+
+    kill -9 "${DAEMON_PIDS[$daemon_index]}" 2>/dev/null
+    wait "${DAEMON_PIDS[$daemon_index]}" 2>/dev/null
+    rm -f "$socket"
+
+    nsenter -t "$pid" -n env \
+        BARENETES_NODE_ID="$node_id" \
+        BARENETES_NODE_IP="$node_ip" \
+        BARENETES_REMOTE_NODE_IPS="$remote_ip" \
+        BARENETES_CNI_SOCKET="$socket" \
+        BARENETES_CNI_STATE_DIR="$state" \
+        BARENETES_CNI_IP_POOL_DIR="$TMP_DIR/pool-node-${node_id}" \
+        "$CNI_BIN" >"$log" 2>&1 &
+    DAEMON_PIDS[$daemon_index]="$!"
+    for _ in $(seq 1 50); do
+        [[ -S "$socket" ]] && return 0
+        kill -0 "${DAEMON_PIDS[$daemon_index]}" 2>/dev/null \
+            || { cat "$log" >&2; fail "daemon du nœud $node_id n'a pas redémarré"; }
+        sleep 0.1
+    done
+    cat "$log" >&2
+    fail "socket du nœud $node_id absente après redémarrage"
+}
+
 start_workload() {
     start_netns
 }
 
 add_workload() {
-    local node_id=$1 instance=$2 network=$3 vlan=$4 pid=$5
+    local node_id=$1 instance=$2 network=$3 vlan=$4 pid=$5 port_mapping=${6:-}
     BARENETES_CNI_SOCKET="${NODE_SOCKETS[$node_id]}" "$CLIENT_BIN" \
-        add "$instance" "$network" "$vlan" "/proc/$pid/ns/net"
+        add "$instance" "$network" "$vlan" "/proc/$pid/ns/net" $port_mapping
 }
 
 delete_workload() {
@@ -131,7 +168,7 @@ assert_ping() {
     nsenter -t "$pid" -n ping -c 1 -W 1 "$address" >/dev/null || fail "$message"
 }
 
-echo "[1/4] un nœud avec un workload"
+echo "[1/5] un nœud avec un workload"
 start_node 1 192.0.2.1 192.0.2.2
 start_workload; W1=$LAST_NETNS_PID
 add_workload 1 single-a tenant-single 100 "$W1"
@@ -139,7 +176,7 @@ nsenter -t "$W1" -n ip -4 addr show dev eth0 | grep -q '10.100.1.2/16' || fail "
 assert_ping "$W1" 10.100.1.1 "gateway inaccessible"
 delete_workload 1 single-a tenant-single 100
 
-echo "[2/4] un nœud avec plusieurs workloads"
+echo "[2/5] un nœud avec plusieurs workloads"
 start_workload; W2=$LAST_NETNS_PID
 start_workload; W3=$LAST_NETNS_PID
 add_workload 1 single-a tenant-many 101 "$W2"
@@ -149,7 +186,7 @@ assert_ping "$W3" 10.101.1.2 "communication locale B → A échouée"
 delete_workload 1 single-a tenant-many 101
 delete_workload 1 single-b tenant-many 101
 
-echo "[3/4] plusieurs nœuds avec un workload par nœud"
+echo "[3/5] plusieurs nœuds avec un workload par nœud"
 start_node 2 192.0.2.2 192.0.2.1
 start_workload; W4=$LAST_NETNS_PID
 start_workload; W5=$LAST_NETNS_PID
@@ -160,7 +197,7 @@ assert_ping "$W5" 10.102.1.2 "VXLAN nœud 2 → nœud 1 échoué"
 delete_workload 1 multi-a tenant-multi-one 102
 delete_workload 2 multi-b tenant-multi-one 102
 
-echo "[4/4] plusieurs nœuds avec plusieurs workloads par nœud"
+echo "[4/5] plusieurs nœuds avec plusieurs workloads par nœud"
 start_workload; W6=$LAST_NETNS_PID
 start_workload; W7=$LAST_NETNS_PID
 start_workload; W8=$LAST_NETNS_PID
@@ -178,9 +215,31 @@ delete_workload 1 multi-a-2 tenant-multi-many 103
 delete_workload 2 multi-b-1 tenant-multi-many 103
 delete_workload 2 multi-b-2 tenant-multi-many 103
 
+echo "[5/5] réconciliation au redémarrage : veth orpheline et iptables -F sur un nœud vivant"
+N1=${NODE_NETNS_PIDS[1]}
+start_workload; W10=$LAST_NETNS_PID
+add_workload 1 reconcile-a tenant-reconcile 108 "$W10" 8080:80
+nsenter -t "$N1" -n iptables -t nat -S | grep -q '10.108.1.2:80' \
+    || fail "règle DNAT absente juste après l'ajout du workload"
+nsenter -t "$N1" -n ip link add vdeadbeef00 type veth peer name pdeadbeef00
+nsenter -t "$N1" -n ip link set vdeadbeef00 master barenetes0
+nsenter -t "$N1" -n ip link set vdeadbeef00 up
+nsenter -t "$N1" -n iptables -F
+nsenter -t "$N1" -n iptables -t nat -F
+restart_node_daemon 1 192.0.2.1 192.0.2.2 0
+nsenter -t "$N1" -n ip link show vdeadbeef00 >/dev/null 2>&1 \
+    && fail "le veth orphelin vdeadbeef00 est toujours là après redémarrage"
+nsenter -t "$N1" -n iptables -t nat -S | grep -q '10.108.1.2:80' \
+    || fail "la règle DNAT n'a pas été réinstallée après iptables -F"
+nsenter -t "$N1" -n iptables -t nat -S POSTROUTING | grep -q MASQUERADE \
+    || fail "le MASQUERADE du tenant n'a pas été réinstallé après iptables -F"
+assert_ping "$W10" 10.108.1.1 "passerelle du tenant injoignable après reconciliation"
+
+delete_workload 1 reconcile-a tenant-reconcile 108
+
 for state in "${NODE_STATES[@]}"; do
     if [[ -d "$state" ]] && find "$state" -type f -name '*.json' -print -quit | grep -q .; then
         fail "des fichiers d'état restent dans $state"
     fi
 done
-echo "OK - les quatre parcours CNI ont réussi"
+echo "OK - les cinq parcours CNI ont réussi"
