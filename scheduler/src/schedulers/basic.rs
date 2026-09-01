@@ -1,6 +1,6 @@
-use proto::scheduler::v1::{SchedulePodRequest, SchedulePodResponse, scheduler_server::Scheduler};
-use proto::shared::v1::{Node, NodeStatus, Resources};
-use tonic::{Request, Response, Status};
+use std::collections::HashMap;
+
+use proto::shared::v1::{Node, NodeStatus, Pod};
 
 /// Calculate the general usage of the given node.
 /// Does it by averaging the cpu and memory usage.
@@ -25,41 +25,43 @@ A very simple scheduler that schedules pods to the
 node that is doing the less amount of work while
 still having enough resources to fit the given pod
 by only looking at the resource limits.
+
+Node state is fed in from the API server's `WatchNodes` stream
+(see `upsert_node`/`remove_node`) rather than hardcoded, so the
+caller is responsible for keeping it current.
 */
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct BasicScheduler {
-    nodes: Vec<Node>,
+    nodes: HashMap<String, Node>,
 }
 
-#[tonic::async_trait]
-impl Scheduler for BasicScheduler {
-    async fn schedule_pod(
-        &self,
-        request: Request<SchedulePodRequest>,
-    ) -> Result<Response<SchedulePodResponse>, Status> {
-        let pod = request
-            .into_inner()
-            .pod
-            .ok_or(Status::invalid_argument("Missing pod"))?;
+impl BasicScheduler {
+    pub fn upsert_node(&mut self, node: Node) {
+        self.nodes.insert(node.name.clone(), node);
+    }
 
-        println!("Finding a candidate for pod {}", pod.name);
+    pub fn remove_node(&mut self, name: &str) {
+        self.nodes.remove(name);
+    }
 
+    /// Finds the node doing the least amount of work that still has
+    /// enough capacity to fit `pod`.
+    ///
+    /// Returns the elected node's name, or a human-readable reason
+    /// the pod couldn't be placed (meant to be reported back via
+    /// `AssignPod`'s `unschedulable_reason`).
+    pub fn place(&self, pod: &Pod) -> Result<String, String> {
         let resources = pod
             .limits
-            .ok_or(Status::invalid_argument("Missing resources field"))?;
-
-        println!(
-            "Pod asks for {} mCPU and {} MB of RAM",
-            resources.cpu, resources.memory
-        );
+            .as_ref()
+            .ok_or_else(|| "pod is missing a resources.limits field".to_string())?;
 
         let candidates: Vec<&Node> = self
             .nodes
-            .iter()
+            .values()
             // Don't schedule on nodes that aren't ready
             .filter(|node| node.status() == NodeStatus::Ready)
             // Only keep nodes that have the capacity to run the pod
-            .filter(|node| node.capacity.is_some())
             .filter(|node| {
                 node.allocatable.as_ref().is_some_and(|allocatable| {
                     allocatable.cpu > resources.cpu && allocatable.memory > resources.memory
@@ -67,16 +69,14 @@ impl Scheduler for BasicScheduler {
             })
             .collect();
 
-        println!("Found candidates: {:?}", candidates);
-
         // Now that we have a list of candidates, we determine the node doing
         // the less amount of work by doing getting min( (ramUsage% + cpuUsage%)/2 )
 
-        let mut elected = candidates
+        let mut elected = *candidates
             .first()
-            .ok_or(Status::resource_exhausted("No valid candidate found"))?;
+            .ok_or_else(|| "no ready node has enough capacity for this pod".to_string())?;
 
-        for candidate in candidates.iter() {
+        for candidate in &candidates {
             let (Some(elected_usage), Some(candidate_usage)) = (
                 calculate_general_usage(elected),
                 calculate_general_usage(candidate),
@@ -91,88 +91,14 @@ impl Scheduler for BasicScheduler {
             }
         }
 
-        println!("Elected {:?}", elected);
-
-        Ok(Response::from(SchedulePodResponse {
-            node_name: elected.name.clone(),
-        }))
-    }
-}
-
-// Random plausible data for testing purposes
-// TODO: Use the API Server to get the actual node state
-impl Default for BasicScheduler {
-    fn default() -> Self {
-        let nodes = vec![
-            Node {
-                name: String::from("Black Pearl"),
-                status: NodeStatus::Ready.into(),
-                capacity: Some(Resources {
-                    cpu: 8000,
-                    memory: 32768,
-                }),
-                allocatable: Some(Resources {
-                    cpu: 7800,
-                    memory: 31000,
-                }),
-            },
-            Node {
-                name: String::from("Flying Dutchman"),
-                status: NodeStatus::Cordon.into(),
-                capacity: Some(Resources {
-                    cpu: 4000,
-                    memory: 16384,
-                }),
-                allocatable: Some(Resources {
-                    cpu: 3900,
-                    memory: 15200,
-                }),
-            },
-            Node {
-                name: String::from("Davy Jones' Locker"),
-                status: NodeStatus::Drain.into(),
-                capacity: Some(Resources {
-                    cpu: 16000,
-                    memory: 65536,
-                }),
-                allocatable: Some(Resources {
-                    cpu: 15800,
-                    memory: 63000,
-                }),
-            },
-            Node {
-                name: String::from("Silent Mary"),
-                status: NodeStatus::NotReady.into(),
-                capacity: Some(Resources {
-                    cpu: 2000,
-                    memory: 8192,
-                }),
-                allocatable: Some(Resources {
-                    cpu: 1900,
-                    memory: 7000,
-                }),
-            },
-            Node {
-                name: String::from("Queen Anne's Revenge"),
-                status: NodeStatus::Ready.into(),
-                capacity: Some(Resources {
-                    cpu: 4000,
-                    memory: 16384,
-                }),
-                allocatable: Some(Resources {
-                    cpu: 3500,
-                    memory: 14000,
-                }),
-            },
-        ];
-
-        BasicScheduler { nodes }
+        Ok(elected.name.clone())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proto::shared::v1::Resources;
 
     fn get_node(capacity: Resources, allocatable: Resources) -> Node {
         Node {

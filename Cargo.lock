@@ -1019,6 +1019,7 @@ dependencies = [
  "prost",
  "proto",
  "tokio",
+ "tokio-stream",
  "tonic",
  "tonic-prost",
 ]
