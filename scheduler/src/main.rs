@@ -40,8 +40,8 @@ struct SchedulerState {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let client = ApiServerClient::connect(cli.server.clone()).await?;
-    println!("Scheduler connected to API server at {}", cli.server);
+    println!("Connecting to API server at {}", cli.server);
+    let client = ApiServerClient::connect(cli.server).await?;
 
     let state = Arc::new(Mutex::new(SchedulerState::default()));
 
