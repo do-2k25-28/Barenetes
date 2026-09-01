@@ -1016,6 +1016,8 @@ dependencies = [
 name = "scheduler"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "clap",
  "prost",
  "proto",
  "tokio",

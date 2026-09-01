@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use anyhow::Result;
+use clap::Parser;
 use proto::api::v1::api_server_client::ApiServerClient;
 use proto::api::v1::{AssignPodRequest, WatchNodesRequest, WatchPodsRequest, assign_pod_request};
 use proto::shared::v1::{EventType, Pod};
@@ -12,7 +14,15 @@ mod schedulers;
 
 use schedulers::BasicScheduler;
 
-const DEFAULT_API_ADDR: &str = "http://127.0.0.1:50052";
+/// The scheduler runs on worker nodes, never on a control plane, so there's
+/// no sensible default: the operator must always say where the API server is.
+#[derive(Parser)]
+#[command(name = "scheduler", version, about = "Barenetes scheduler")]
+struct Cli {
+    /// Address of the API server (e.g. http://127.0.0.1:50052)
+    #[arg(long, env = "BARENETES_SERVER")]
+    server: String,
+}
 
 /// (namespace, name)
 type PodKey = (String, String);
@@ -27,12 +37,11 @@ struct SchedulerState {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let api_addr =
-        std::env::var("BARENETES_SERVER").unwrap_or_else(|_| DEFAULT_API_ADDR.to_string());
+async fn main() -> Result<()> {
+    let cli = Cli::parse();
 
-    let client = ApiServerClient::connect(api_addr.clone()).await?;
-    println!("Scheduler connected to API server at {api_addr}");
+    let client = ApiServerClient::connect(cli.server.clone()).await?;
+    println!("Scheduler connected to API server at {}", cli.server);
 
     let state = Arc::new(Mutex::new(SchedulerState::default()));
 
@@ -53,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 async fn watch_nodes(
     mut client: ApiServerClient<Channel>,
     state: Arc<Mutex<SchedulerState>>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<()> {
     let mut stream = client.watch_nodes(WatchNodesRequest {}).await?.into_inner();
 
     while let Some(event) = stream.next().await {
@@ -87,7 +96,7 @@ async fn watch_nodes(
 async fn watch_pods(
     mut client: ApiServerClient<Channel>,
     state: Arc<Mutex<SchedulerState>>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<()> {
     let mut stream = client.watch_pods(WatchPodsRequest {}).await?.into_inner();
 
     while let Some(event) = stream.next().await {
@@ -137,7 +146,7 @@ async fn try_schedule(
     namespace: &str,
     name: &str,
     pod: &Pod,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<()> {
     let key = (namespace.to_string(), name.to_string());
 
     let outcome = {
