@@ -69,8 +69,8 @@ fn build_pod(args: CreatePodArgs) -> Result<PodWithSpec, CliError> {
         pod: Some(Pod {
             name: name.clone(),
             status: PodStatus::Pending as i32,
-            requests: resources(args.cpu_request, args.memory_request),
-            limits: resources(args.cpu_limit, args.memory_limit),
+            requests: resources(args.cpu_request, args.memory_request)?,
+            limits: resources(args.cpu_limit, args.memory_limit)?,
         }),
         spec: Some(PodSpec {
             namespace,
@@ -84,14 +84,14 @@ fn build_pod(args: CreatePodArgs) -> Result<PodWithSpec, CliError> {
     })
 }
 
-fn resources(cpu: Option<i32>, memory: Option<i32>) -> Option<Resources> {
-    if cpu.is_none() && memory.is_none() {
-        return None;
+fn resources(cpu: Option<i32>, memory: Option<i32>) -> Result<Option<Resources>, CliError> {
+    match (cpu, memory) {
+        (None, None) => Ok(None),
+        (Some(c), Some(m)) => Ok(Some(Resources { cpu: c, memory: m })),
+        _ => Err(CliError::InvalidUsage(
+            "cpu and memory must both be specified, or both omitted".to_string(),
+        )),
     }
-    Some(Resources {
-        cpu: cpu.unwrap_or_default(),
-        memory: memory.unwrap_or_default(),
-    })
 }
 
 pub async fn get_pod(server: &str, args: GetPodArgs) -> Result<(), CliError> {
@@ -326,13 +326,13 @@ fn print_pod(pod: &PodDetail) {
         println!();
         if let Some(requests) = requests {
             println!(
-                "Requests:    cpu={}m, memory={}Mi",
+                "Requests:    cpu={}m, memory={}MB",
                 requests.cpu, requests.memory
             );
         }
         if let Some(limits) = limits {
             println!(
-                "Limits:      cpu={}m, memory={}Mi",
+                "Limits:      cpu={}m, memory={}MB",
                 limits.cpu, limits.memory
             );
         }
