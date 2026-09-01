@@ -1,16 +1,14 @@
 use proto::api::v1::api_server_client::ApiServerClient;
 use proto::api::v1::{
-    CreatePodRequest, DeletePodRequest, GetNodeRequest, GetPodRequest, ListNodesRequest,
-    ListPodsRequest,
+    CreatePodRequest, DeletePodRequest, GetNodeRequest, ListNodesRequest, ListPodsRequest,
 };
 use proto::shared::v1::{
     Container, Node, NodeStatus, Pod, PodDetail, PodSpec, PodStatus, PodWithSpec, Protocol,
     Resources,
 };
+use tonic::transport::Channel;
 
-use crate::cli::{
-    CreatePodArgs, DeletePodArgs, GetNodeArgs, GetPodArgs, ListNodesArgs, ListPodsArgs,
-};
+use crate::cli::{CreatePodArgs, DeletePodArgs, GetNodeArgs, GetPodArgs};
 use crate::error::CliError;
 use crate::manifest::PodManifest;
 
@@ -104,16 +102,47 @@ pub async fn get_pod(server: &str, args: GetPodArgs) -> Result<(), CliError> {
             source,
         })?;
 
-    let response = client
-        .get_pod(GetPodRequest {
-            name: args.name,
-            namespace: args.namespace,
-        })
-        .await?;
+    let response = client.list_pods(ListPodsRequest {}).await?;
+    let mut pods = response.into_inner().pods;
+    pods.retain(|pod| matches_filters(pod, &args));
 
-    match response.into_inner().pod {
-        Some(pod) => print_pod(&pod),
-        None => return Err(CliError::EmptyResponse),
+    if pods.is_empty() {
+        println!("0 pods returned.");
+        return Ok(());
+    }
+
+    // if there's only 1 pod and the request specified a name, display details
+    if pods.len() == 1 {
+        match &args.name {
+            None => {}
+            Some(_) => {
+                print_pod(&pods[0]);
+                return Ok(());
+            }
+        }
+    }
+
+    pods.sort_by(|a, b| (pod_namespace(a), pod_name(a)).cmp(&(pod_namespace(b), pod_name(b))));
+
+    println!(
+        "{:<15} {:<12} {:<10} {:<15} IMAGE",
+        "NAME", "NAMESPACE", "STATUS", "NODE"
+    );
+    for pod in &pods {
+        let images = pod_containers(pod)
+            .iter()
+            .map(|c| c.image.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        let status = format!("{:?}", pod_status(pod));
+        println!(
+            "{:<15} {:<12} {:<10} {:<15} {}",
+            pod_name(pod),
+            pod_namespace(pod),
+            status,
+            or_none(&pod.node_name),
+            images
+        );
     }
 
     Ok(())
@@ -151,68 +180,25 @@ fn pod_containers(pod: &PodDetail) -> &[Container] {
         .unwrap_or_default()
 }
 
-pub async fn list_pods(server: &str, args: ListPodsArgs) -> Result<(), CliError> {
-    let mut client = ApiServerClient::connect(server.to_string())
+pub async fn get_node(server: &str, args: GetNodeArgs) -> Result<(), CliError> {
+    let client = ApiServerClient::connect(server.to_string())
         .await
         .map_err(|source| CliError::Connect {
             addr: server.to_string(),
             source,
         })?;
 
-    let response = client.list_pods(ListPodsRequest {}).await?;
-    let mut pods = response.into_inner().pods;
-
-    if pods.is_empty() {
-        println!("No pods found.");
-        return Ok(());
+    match args.name {
+        None => list_nodes(client).await,
+        Some(node_name) => get_one_node(client, node_name).await,
     }
-
-    pods.retain(|pod| matches_filters(pod, &args));
-
-    if pods.is_empty() {
-        println!("No pods match the given filters.");
-        return Ok(());
-    }
-
-    pods.sort_by(|a, b| (pod_namespace(a), pod_name(a)).cmp(&(pod_namespace(b), pod_name(b))));
-
-    println!(
-        "{:<15} {:<12} {:<10} {:<15} IMAGE",
-        "NAME", "NAMESPACE", "STATUS", "NODE"
-    );
-    for pod in &pods {
-        let images = pod_containers(pod)
-            .iter()
-            .map(|c| c.image.as_str())
-            .collect::<Vec<_>>()
-            .join(",");
-        let status = format!("{:?}", pod_status(pod));
-        println!(
-            "{:<15} {:<12} {:<10} {:<15} {}",
-            pod_name(pod),
-            pod_namespace(pod),
-            status,
-            or_none(&pod.node_name),
-            images
-        );
-    }
-
-    Ok(())
 }
 
-pub async fn get_node(server: &str, args: GetNodeArgs) -> Result<(), CliError> {
-    let mut client = ApiServerClient::connect(server.to_string())
-        .await
-        .map_err(|source| CliError::Connect {
-            addr: server.to_string(),
-            source,
-        })?;
-
-    let response = client
-        .get_node(GetNodeRequest {
-            name: args.name.clone(),
-        })
-        .await?;
+async fn get_one_node(
+    mut client: ApiServerClient<Channel>,
+    node_name: String,
+) -> Result<(), CliError> {
+    let response = client.get_node(GetNodeRequest { name: node_name }).await?;
 
     match response.into_inner().node {
         Some(node) => print_node(&node),
@@ -222,26 +208,7 @@ pub async fn get_node(server: &str, args: GetNodeArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-fn print_node(node: &Node) {
-    let status = NodeStatus::try_from(node.status).unwrap_or(NodeStatus::NotReady);
-    println!("Name:        {}", node.name);
-    println!("Status:      {:?}", status);
-    if let Some(cap) = &node.capacity {
-        println!("Capacity:    cpu={}m, memory={}Mi", cap.cpu, cap.memory);
-    }
-    if let Some(alloc) = &node.allocatable {
-        println!("Allocatable: cpu={}m, memory={}Mi", alloc.cpu, alloc.memory);
-    }
-}
-
-pub async fn list_nodes(server: &str, _args: ListNodesArgs) -> Result<(), CliError> {
-    let mut client = ApiServerClient::connect(server.to_string())
-        .await
-        .map_err(|source| CliError::Connect {
-            addr: server.to_string(),
-            source,
-        })?;
-
+async fn list_nodes(mut client: ApiServerClient<Channel>) -> Result<(), CliError> {
     let nodes = client
         .list_nodes(ListNodesRequest {})
         .await?
@@ -276,7 +243,19 @@ pub async fn list_nodes(server: &str, _args: ListNodesArgs) -> Result<(), CliErr
     Ok(())
 }
 
-fn matches_filters(pod: &PodDetail, args: &ListPodsArgs) -> bool {
+fn print_node(node: &Node) {
+    let status = NodeStatus::try_from(node.status).unwrap_or(NodeStatus::NotReady);
+    println!("Name:        {}", node.name);
+    println!("Status:      {:?}", status);
+    if let Some(cap) = &node.capacity {
+        println!("Capacity:    cpu={}m, memory={}Mi", cap.cpu, cap.memory);
+    }
+    if let Some(alloc) = &node.allocatable {
+        println!("Allocatable: cpu={}m, memory={}Mi", alloc.cpu, alloc.memory);
+    }
+}
+
+fn matches_filters(pod: &PodDetail, args: &GetPodArgs) -> bool {
     if let Some(name) = &args.name
         && pod_name(pod) != name
     {
