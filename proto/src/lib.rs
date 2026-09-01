@@ -16,12 +16,6 @@ pub mod cni {
     }
 }
 
-pub mod scheduler {
-    pub mod v1 {
-        tonic::include_proto!("scheduler.v1");
-    }
-}
-
 pub mod shared {
     pub mod v1 {
         tonic::include_proto!("shared.v1");
