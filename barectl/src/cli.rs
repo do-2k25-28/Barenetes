@@ -39,16 +39,16 @@ pub struct CreatePodArgs {
     #[arg(short, long)]
     pub file: Option<PathBuf>,
 
-    /// Pod name (also used as the container name);
-    pub name: String,
+    /// Pod name (also used as the container name); required unless --file is used
+    pub name: Option<String>,
 
-    /// Namespace to create the pod in
-    #[arg(short, long, default_value = "default")]
-    pub namespace: String,
-
-    /// Container image (OCI reference)
+    /// Namespace to create the pod in (default "default"); ignored with --file
     #[arg(short, long)]
-    pub image: String,
+    pub namespace: Option<String>,
+
+    /// Container image (OCI reference); required unless --file is used
+    #[arg(short, long)]
+    pub image: Option<String>,
 
     /// Exposed port, format HOST:CONTAINER[/tcp|udp] (repeatable)
     #[arg(short, long = "port", value_parser = parse_port)]
