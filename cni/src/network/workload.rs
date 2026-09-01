@@ -16,6 +16,20 @@ use proto::cni::v1::{
 const IP: &str = "ip";
 const BRIDGE: &str = "bridge";
 const NSENTER: &str = "nsenter";
+const HOST_INTERFACE_ID_LEN: usize = 10;
+
+pub(crate) fn host_interface_name(workload: &str, instance: &str, network: &str) -> String {
+    format!(
+        "v{}",
+        &stable_id(&[workload, instance, network])[..HOST_INTERFACE_ID_LEN]
+    )
+}
+
+pub(crate) fn is_host_interface_name(name: &str) -> bool {
+    name.len() == HOST_INTERFACE_ID_LEN + 1
+        && name.starts_with('v')
+        && name[1..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
 
 pub(crate) fn add_workload_network(
     request: AddWorkloadNetworkRequest,
@@ -67,13 +81,10 @@ pub(crate) fn add_workload_network(
     let gateway_string = gateway.to_string();
     let pool = pools.pool(network.vlan_id)?;
     let address = pool.allocate()?;
-    let host_interface = format!(
-        "v{}",
-        &stable_id(&[
-            &workload.workload_name,
-            &workload.instance_name,
-            &network.network_name
-        ])[..10]
+    let host_interface = host_interface_name(
+        &workload.workload_name,
+        &workload.instance_name,
+        &network.network_name,
     );
     let peer_interface = format!("p{}", &host_interface[1..]);
     let address_with_prefix = format!("{address}/16");
@@ -478,5 +489,15 @@ mod tests {
         request.interface_name = "e".repeat(16);
 
         assert!(validate_add_request(&request).is_err());
+    }
+
+    #[test]
+    fn host_interface_names_are_recognized_by_is_host_interface_name() {
+        let name = host_interface_name("api", "api-1", "tenant-a");
+
+        assert!(is_host_interface_name(&name));
+        assert!(!is_host_interface_name("barenetes0"));
+        assert!(!is_host_interface_name("barenetes0.100"));
+        assert!(!is_host_interface_name("barenetes-vx"));
     }
 }

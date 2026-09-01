@@ -118,6 +118,31 @@ impl StateStore {
         }
         Ok(false)
     }
+
+    pub(crate) fn records(&self) -> io::Result<Vec<WorkloadRecord>> {
+        let entries = match std::fs::read_dir(&self.directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+        let mut records = Vec::new();
+        for entry in entries {
+            let path = entry?.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            match File::open(&path).and_then(read_record) {
+                Ok(record) => records.push(record),
+                Err(error) => {
+                    eprintln!(
+                        "cni: skipping unreadable state file {}: {error}",
+                        path.display()
+                    )
+                }
+            }
+        }
+        Ok(records)
+    }
 }
 
 fn read_record(file: File) -> io::Result<WorkloadRecord> {
@@ -187,5 +212,39 @@ mod tests {
     #[test]
     fn stable_ids_include_part_boundaries() {
         assert_ne!(stable_id(&["ab", "c"]), stable_id(&["a", "bc"]));
+    }
+
+    #[test]
+    fn records_lists_every_saved_workload() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = StateStore::new(directory.path());
+        assert!(store.records().unwrap().is_empty());
+
+        let mut second = record();
+        second.instance_name = "api-2".into();
+        store.save(&record()).unwrap();
+        store.save(&second).unwrap();
+
+        let mut instances: Vec<_> = store
+            .records()
+            .unwrap()
+            .into_iter()
+            .map(|record| record.instance_name)
+            .collect();
+        instances.sort();
+        assert_eq!(instances, vec!["api-1", "api-2"]);
+    }
+
+    #[test]
+    fn records_skips_a_corrupt_file_instead_of_failing_the_whole_listing() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = StateStore::new(directory.path());
+        store.save(&record()).unwrap();
+        std::fs::write(directory.path().join("corrupt.json"), b"not json").unwrap();
+
+        let records = store.records().unwrap();
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].instance_name, "api-1");
     }
 }

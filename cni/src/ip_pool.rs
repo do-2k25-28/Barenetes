@@ -35,6 +35,30 @@ impl IpPoolDirectory {
         let (first, last) = crate::addressing::pool_range(vlan, self.node);
         IpPool::new(self.root.join(format!("vlan-{vlan}")), first, last)
     }
+
+    pub(crate) fn known_vlans(&self) -> io::Result<Vec<u8>> {
+        let entries = match std::fs::read_dir(&self.root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+        let mut vlans = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            if let Some(vlan) = entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.strip_prefix("vlan-"))
+                .and_then(|suffix| suffix.parse::<u8>().ok())
+            {
+                vlans.push(vlan);
+            }
+        }
+        Ok(vlans)
+    }
 }
 
 #[derive(Clone)]
@@ -88,6 +112,13 @@ impl IpPool {
             ));
         }
         self.with_state(|state| Ok(state.allocated.remove(&address)))
+    }
+
+    pub(crate) fn reset(&self, allocated: BTreeSet<Ipv4Addr>) -> io::Result<()> {
+        self.with_state(|state| {
+            state.allocated = allocated;
+            Ok(())
+        })
     }
 
     fn with_state<T>(
@@ -189,6 +220,37 @@ mod tests {
                 .unwrap(),
             first
         );
+    }
+
+    #[test]
+    fn resets_the_allocated_set() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = Ipv4Addr::new(10, 0, 0, 2);
+        let last = Ipv4Addr::new(10, 0, 0, 4);
+        let pool = IpPool::new(directory.path(), first, last).unwrap();
+        pool.allocate().unwrap();
+        pool.allocate().unwrap();
+
+        let kept = Ipv4Addr::new(10, 0, 0, 4);
+        pool.reset(BTreeSet::from([kept])).unwrap();
+
+        assert!(pool.release(first).is_ok_and(|released| !released));
+        assert!(pool.release(kept).is_ok_and(|released| released));
+    }
+
+    #[test]
+    fn known_vlans_lists_existing_pool_directories_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let pools = IpPoolDirectory::new(directory.path(), 1);
+        assert_eq!(pools.known_vlans().unwrap(), Vec::<u8>::new());
+
+        pools.pool(100).unwrap().allocate().unwrap();
+        pools.pool(200).unwrap().allocate().unwrap();
+        std::fs::create_dir(directory.path().join("not-a-pool")).unwrap();
+
+        let mut vlans = pools.known_vlans().unwrap();
+        vlans.sort_unstable();
+        assert_eq!(vlans, vec![100, 200]);
     }
 
     #[test]

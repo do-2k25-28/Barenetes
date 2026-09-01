@@ -14,18 +14,17 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     network::ensure_bridge()?;
     network::ensure_overlay()?;
     network::ensure_egress()?;
-    let socket_path = configured_path("BARENETES_CNI_SOCKET", "/run/barenetes/cni.sock");
     let state_path = configured_path(
         "BARENETES_CNI_STATE_DIR",
         "/var/lib/barenetes/cni/workloads",
     );
+    let state = state::StateStore::new(state_path);
+    network::reconcile(&pools, &state)?;
+    let socket_path = configured_path("BARENETES_CNI_SOCKET", "/run/barenetes/cni.sock");
     let listener = socket::bind(&socket_path)?;
 
     let result = Server::builder()
-        .add_service(CniServiceServer::new(CniRpcService::new(
-            pools,
-            state::StateStore::new(state_path),
-        )))
+        .add_service(CniServiceServer::new(CniRpcService::new(pools, state)))
         .serve_with_incoming_shutdown(UnixListenerStream::new(listener), shutdown_signal())
         .await;
 
