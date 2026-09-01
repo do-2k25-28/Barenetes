@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -10,6 +12,21 @@ pub enum CliError {
 
     #[error("api returned no resource for this request")]
     EmptyResponse,
+
+    #[error("could not read manifest {path}: {source}")]
+    ReadManifest {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+
+    #[error("could not parse manifest {path}: {source}")]
+    ParseManifest {
+        path: PathBuf,
+        source: serde_yaml::Error,
+    },
+
+    #[error("{0}")]
+    InvalidUsage(String),
 
     #[error("{message}")]
     Server { message: String },

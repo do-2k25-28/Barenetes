@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{Args, Parser, Subcommand};
 use proto::shared::v1::{EnvVar, Port, Protocol};
 
@@ -33,16 +35,20 @@ pub enum Commands {
 
 #[derive(Args)]
 pub struct CreatePodArgs {
-    /// Pod name (also used as the container name)
-    pub name: String,
-
-    /// Namespace to create the pod in
-    #[arg(short, long, default_value = "default")]
-    pub namespace: String,
-
-    /// Container image (OCI reference)
+    /// Create the pod from a YAML manifest file, instead of the flags below
     #[arg(short, long)]
-    pub image: String,
+    pub file: Option<PathBuf>,
+
+    /// Pod name (also used as the container name); required unless --file is used
+    pub name: Option<String>,
+
+    /// Namespace to create the pod in (default "default"); ignored with --file
+    #[arg(short, long)]
+    pub namespace: Option<String>,
+
+    /// Container image (OCI reference); required unless --file is used
+    #[arg(short, long)]
+    pub image: Option<String>,
 
     /// Exposed port, format HOST:CONTAINER[/tcp|udp] (repeatable)
     #[arg(short, long = "port", value_parser = parse_port)]
