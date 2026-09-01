@@ -326,13 +326,13 @@ fn print_pod(pod: &PodDetail) {
         println!();
         if let Some(requests) = requests {
             println!(
-                "Requests:    cpu={}m, memory={}Mi",
+                "Requests:    cpu={}m, memory={}MB",
                 requests.cpu, requests.memory
             );
         }
         if let Some(limits) = limits {
             println!(
-                "Limits:      cpu={}m, memory={}Mi",
+                "Limits:      cpu={}m, memory={}MB",
                 limits.cpu, limits.memory
             );
         }
