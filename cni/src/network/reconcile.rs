@@ -94,7 +94,8 @@ fn rebuild_ip_pools(pools: &IpPoolDirectory, live: &[WorkloadRecord]) {
 
 fn remove_orphan_interfaces(live: &[WorkloadRecord]) -> io::Result<()> {
     for port in bridge_ports(BRIDGE_NAME)? {
-        if is_workload_interface(&port) && !live.iter().any(|record| record.host_interface == port)
+        if super::workload::is_host_interface_name(&port)
+            && !live.iter().any(|record| record.host_interface == port)
         {
             eprintln!("cni: removing orphan interface {port}");
             if let Err(error) = run(IP, &["link", "delete", &port]) {
@@ -143,25 +144,9 @@ fn bridge_ports(bridge: &str) -> io::Result<Vec<String>> {
         .collect())
 }
 
-fn is_workload_interface(name: &str) -> bool {
-    name.len() == 11
-        && name.starts_with('v')
-        && name[1..].bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn recognizes_workload_interface_names() {
-        assert!(is_workload_interface("v3f9a2b1c4d"));
-        assert!(!is_workload_interface("barenetes0"));
-        assert!(!is_workload_interface("barenetes0.100"));
-        assert!(!is_workload_interface("barenetes-vx"));
-        assert!(!is_workload_interface("v3f9a2b1c4"));
-        assert!(!is_workload_interface("v3f9a2b1c4dz"));
-    }
 
     fn record(vlan_id: u32, ip_address: &str) -> WorkloadRecord {
         WorkloadRecord {
