@@ -7,7 +7,7 @@ use proto::agent::v1::kubelet_client::KubeletClient;
 use proto::agent::v1::{ApplyPodRequest, DeletePodRequest};
 use proto::shared::v1::{Container, Pod, PodSpec, PodWithSpec};
 
-const KUBELET: &str = "http://127.0.0.1:50052";
+const KUBELET: &str = "http://127.0.0.1:50053";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -13,7 +13,7 @@ const AGENT_STATE_DIR: &str = "/var/lib/barenetes/agent";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let addr = "127.0.0.1:50052".parse()?;
+    let addr = "127.0.0.1:50053".parse()?;
 
     let containerd = containerd::Containerd::connect(CONTAINERD_SOCKET).await?;
     let cni = cni::Cni::new(CNI_SOCKET);

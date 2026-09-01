@@ -12,7 +12,7 @@ cargo build -p agent
 
 ```sh
 sudo target/debug/agent
-# Kubelet service starting on 127.0.0.1:50052
+# Kubelet service starting on 127.0.0.1:50053
 ```
 
 ## Build
@@ -27,7 +27,7 @@ cargo build -p agent
 
 ```sh
 sudo target/debug/agent
-# Kubelet service starting on 127.0.0.1:50052
+# Kubelet service starting on 127.0.0.1:50053
 ```
 
 ## Start an nginx pod
@@ -92,7 +92,7 @@ grpcurl -plaintext \
           }
         }
       }' \
-  127.0.0.1:50052 agent.v1.Kubelet/ApplyPod
+  127.0.0.1:50053 agent.v1.Kubelet/ApplyPod
 # { "podId": "default-web" }
 ```
 
@@ -102,7 +102,7 @@ And delete it:
 grpcurl -plaintext \
   -import-path proto -proto agent/v1/kubelet.proto \
   -d '{ "podId": "default-web", "gracePeriodSeconds": 5, "force": false }' \
-  127.0.0.1:50052 agent.v1.Kubelet/DeletePod
+  127.0.0.1:50053 agent.v1.Kubelet/DeletePod
 # { "success": true }
 ```
 
