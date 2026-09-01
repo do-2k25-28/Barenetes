@@ -12,7 +12,7 @@ mod schedulers;
 
 use schedulers::BasicScheduler;
 
-const API_ADDR: &str = "http://127.0.0.1:50052";
+const DEFAULT_API_ADDR: &str = "http://127.0.0.1:50052";
 
 /// (namespace, name)
 type PodKey = (String, String);
@@ -28,8 +28,11 @@ struct SchedulerState {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let client = ApiServerClient::connect(API_ADDR).await?;
-    println!("Scheduler connected to API server at {API_ADDR}");
+    let api_addr =
+        std::env::var("BARENETES_SERVER").unwrap_or_else(|_| DEFAULT_API_ADDR.to_string());
+
+    let client = ApiServerClient::connect(api_addr.clone()).await?;
+    println!("Scheduler connected to API server at {api_addr}");
 
     let state = Arc::new(Mutex::new(SchedulerState::default()));
 
