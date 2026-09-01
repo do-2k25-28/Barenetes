@@ -131,7 +131,15 @@ impl StateStore {
             if path.extension().and_then(|value| value.to_str()) != Some("json") {
                 continue;
             }
-            records.push(read_record(File::open(path)?)?);
+            match File::open(&path).and_then(read_record) {
+                Ok(record) => records.push(record),
+                Err(error) => {
+                    eprintln!(
+                        "cni: skipping unreadable state file {}: {error}",
+                        path.display()
+                    )
+                }
+            }
         }
         Ok(records)
     }
@@ -225,5 +233,18 @@ mod tests {
             .collect();
         instances.sort();
         assert_eq!(instances, vec!["api-1", "api-2"]);
+    }
+
+    #[test]
+    fn records_skips_a_corrupt_file_instead_of_failing_the_whole_listing() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = StateStore::new(directory.path());
+        store.save(&record()).unwrap();
+        std::fs::write(directory.path().join("corrupt.json"), b"not json").unwrap();
+
+        let records = store.records().unwrap();
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].instance_name, "api-1");
     }
 }
