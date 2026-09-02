@@ -31,6 +31,7 @@ Barenetes is an open-source, reimplementation of the core Kubernetes control pla
     - [Prerequisites](#prerequisites)
     - [Clone](#clone)
   - [Building](#building)
+  - [Deploying](#deploying)
   - [Contributing](#contributing)
   - [License](#license)
   - [Star History](#star-history)
@@ -114,6 +115,23 @@ Run a component:
 ```bash
 cargo run -p api
 ```
+
+---
+
+## Deploying
+
+Every tagged release (`vX.Y.Z`) publishes all five binaries as GitHub Release
+assets. `deploy/install.sh` installs them as systemd services on a control
+plane and/or worker node:
+
+```sh
+sudo ./deploy/install.sh --role control-plane   # api + scheduler
+sudo ./deploy/install.sh --role worker          # cni + agent
+sudo ./deploy/install.sh --role all             # single-node setup
+```
+
+See [`deploy/README.md`](deploy/README.md) for options (etcd, multi-node CNI
+overlay, etc.) and current limitations.
 
 ---
 
