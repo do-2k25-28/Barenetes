@@ -15,19 +15,10 @@ sudo target/debug/agent
 # Kubelet service starting on 127.0.0.1:50053
 ```
 
-## Build
-
-From the repository root:
+Override the bind address with `--addr` or `BARENETES_AGENT_ADDR`:
 
 ```sh
-cargo build -p agent
-```
-
-## Run
-
-```sh
-sudo target/debug/agent
-# Kubelet service starting on 127.0.0.1:50053
+sudo target/debug/agent --addr 127.0.0.1:60053
 ```
 
 ## Start an nginx pod
