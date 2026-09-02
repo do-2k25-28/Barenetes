@@ -1,0 +1,24 @@
+[Unit]
+Description=Barenetes API server
+Documentation=https://github.com/do-2k25-28/Barenetes
+After=network-online.target
+Wants=network-online.target
+# Uncomment if etcd runs on this host and persistent storage is desired.
+# After=etcd.service
+# Requires=etcd.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/barenetes-api
+WorkingDirectory=/usr/local/bin
+
+# Environment=BARENETES_ETCD_ENDPOINTS=http://127.0.0.1:2379
+Environment=RUST_LOG=info
+
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

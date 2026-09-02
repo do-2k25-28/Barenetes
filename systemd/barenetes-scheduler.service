@@ -1,0 +1,20 @@
+[Unit]
+Description=Barenetes scheduler
+Documentation=https://github.com/do-2k25-28/Barenetes
+After=network-online.target barenetes-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/barenetes-scheduler
+WorkingDirectory=/usr/local/bin
+
+Environment=RUST_LOG=info
+
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

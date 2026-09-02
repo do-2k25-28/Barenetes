@@ -1,0 +1,34 @@
+[Unit]
+Description=Barenetes agent (kubelet equivalent)
+Documentation=https://github.com/do-2k25-28/Barenetes
+After=network-online.target containerd.service barenetes-cni.service
+Wants=network-online.target barenetes-cni.service
+Requires=containerd.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/barenetes-agent
+WorkingDirectory=/usr/local/bin
+
+Environment=RUST_LOG=info
+
+Restart=on-failure
+RestartSec=2
+
+# Creates/owns /var/lib/barenetes/agent, matching AGENT_STATE_DIR in
+# agent/src/main.rs, writable even under ProtectSystem=strict.
+StateDirectory=barenetes/agent
+StateDirectoryMode=0750
+
+# Hardening (kept lighter than api/scheduler since this needs root and
+# talks to containerd/CNI sockets under /run).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+RestrictRealtime=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
