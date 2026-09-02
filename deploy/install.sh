@@ -13,6 +13,8 @@
 #   --role control-plane|worker|all   Components to install (default: control-plane)
 #   --version TAG                     Release tag to install, e.g. v0.1.0 (default: latest)
 #   --repo OWNER/NAME                 GitHub repo to fetch releases from (default: do-2k25-28/Barenetes)
+#   --local-dist DIR                  Install binaries from a local dir instead of GitHub (offline/air-gapped;
+#                                      expects barenetes-<name>-linux-x86_64 files)
 #   --with-etcd                       Install and run a local etcd for the API server's store
 #   --etcd-endpoints URL[,URL...]     Point the API server at an existing etcd instead
 #   --server URL                      API server address for the scheduler (control-plane/all;
@@ -29,6 +31,7 @@ set -euo pipefail
 
 REPO="do-2k25-28/Barenetes"
 VERSION="latest"
+LOCAL_DIST_DIR=""
 ROLE="control-plane"
 WITH_ETCD=false
 ETCD_ENDPOINTS=""
@@ -67,6 +70,8 @@ Options:
   --role control-plane|worker|all   Components to install (default: control-plane)
   --version TAG                     Release tag to install, e.g. v0.1.0 (default: latest)
   --repo OWNER/NAME                 GitHub repo to fetch releases from (default: do-2k25-28/Barenetes)
+  --local-dist DIR                  Install binaries from a local dir instead of GitHub (offline/air-gapped;
+                                     expects barenetes-<name>-linux-x86_64 files)
   --with-etcd                       Install and run a local etcd for the API server's store
   --etcd-endpoints URL[,URL...]     Point the API server at an existing etcd instead
   --server URL                      API server address for the scheduler (control-plane/all;
@@ -88,6 +93,7 @@ parse_args() {
       --role) ROLE="$2"; shift 2 ;;
       --version) VERSION="$2"; shift 2 ;;
       --repo) REPO="$2"; shift 2 ;;
+      --local-dist) LOCAL_DIST_DIR="$2"; shift 2 ;;
       --with-etcd) WITH_ETCD=true; shift ;;
       --etcd-endpoints) ETCD_ENDPOINTS="$2"; shift 2 ;;
       --server) SERVER="$2"; shift 2 ;;
@@ -140,6 +146,13 @@ install_binary() {
   local name="$1" # agent | api | barectl | cni | scheduler
   local asset="barenetes-${name}-linux-x86_64"
   local url tmp
+
+  if [[ -n "$LOCAL_DIST_DIR" ]]; then
+    log "Installing ${asset} from ${LOCAL_DIST_DIR} (offline/--local-dist)..."
+    [[ -f "${LOCAL_DIST_DIR}/${asset}" ]] || die "local dist file not found: ${LOCAL_DIST_DIR}/${asset}"
+    install -m 0755 "${LOCAL_DIST_DIR}/${asset}" "${PREFIX}/barenetes-${name}"
+    return
+  fi
 
   if [[ "$VERSION" == "latest" ]]; then
     url="https://github.com/${REPO}/releases/latest/download/${asset}"
@@ -241,6 +254,8 @@ install_worker() {
 
   systemctl is-active --quiet containerd \
     || die "containerd is required on worker nodes but isn't running. Install/start it first (see deploy/README.md), then re-run with --role worker."
+  command -v iptables >/dev/null 2>&1 \
+    || die "iptables is required by barenetes-cni (bridge/NAT/firewall rules) but isn't installed. Install it (e.g. apt install iptables), then re-run with --role worker."
 
   install -d -m 0755 "$CONF_DIR"
   {

@@ -30,8 +30,12 @@ sudo ./deploy/install.sh --role control-plane --etcd-endpoints http://etcd.inter
 
 ## Worker nodes
 
-Requires `containerd` already installed and running (the installer checks
-and refuses to proceed otherwise — see below for how to install it).
+Requires `containerd` already installed and running, and `iptables`
+installed (`barenetes-cni` shells out to it for bridge/NAT/firewall rules).
+The installer checks both and refuses to proceed otherwise — see below for
+how to install containerd; `iptables` is a standard package
+(`apt install iptables`, already present on most distros other than a
+minimal Debian image).
 
 ```sh
 sudo ./deploy/install.sh --role worker --node-id 1 --node-ip 192.168.1.11 \
