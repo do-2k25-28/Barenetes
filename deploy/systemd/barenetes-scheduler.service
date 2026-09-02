@@ -1,0 +1,31 @@
+[Unit]
+Description=Barenetes scheduler (control plane)
+Documentation=https://github.com/do-2k25-28/Barenetes
+After=network-online.target barenetes-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/barenetes-scheduler
+WorkingDirectory=/usr/local/bin
+
+# Written by deploy/install.sh. Must set BARENETES_SERVER (the scheduler
+# has no default: it needs to be told where the API server is).
+EnvironmentFile=/etc/barenetes/scheduler.env
+
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=2
+
+DynamicUser=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+RestrictRealtime=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

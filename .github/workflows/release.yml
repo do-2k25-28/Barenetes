@@ -1,0 +1,60 @@
+name: Release
+
+# Builds all workspace binaries in release mode and publishes them as assets
+# on a GitHub Release, so deploy/install.sh can fetch them with a plain curl.
+#
+# Triggered by pushing a version tag (v1.2.3), or manually for a re-run.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re-)publish binaries for"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  build:
+    name: Build and publish release binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          rustflags: ""
+
+      # proto/build.rs uses protoc_bin_vendored, no system protoc needed.
+      - name: Build workspace binaries (release)
+        run: cargo build --workspace --release --locked
+
+      - name: Package binaries
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for bin in agent api barectl cni scheduler; do
+            install -m 0755 "target/release/$bin" "dist/barenetes-$bin-linux-x86_64"
+          done
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

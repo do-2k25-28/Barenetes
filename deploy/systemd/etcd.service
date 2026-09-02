@@ -1,0 +1,31 @@
+[Unit]
+Description=etcd (Barenetes control-plane datastore)
+Documentation=https://etcd.io/docs/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/etcd \
+  --data-dir=/var/lib/etcd \
+  --listen-client-urls=http://127.0.0.1:2379 \
+  --advertise-client-urls=http://127.0.0.1:2379 \
+  --listen-peer-urls=http://127.0.0.1:2380
+
+Restart=on-failure
+RestartSec=2
+
+# Single-node etcd used purely as Barenetes' backing store: DynamicUser
+# gets its own uid and owns /var/lib/etcd, no manual user management.
+DynamicUser=true
+StateDirectory=etcd
+StateDirectoryMode=0750
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+RestrictRealtime=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
