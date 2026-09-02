@@ -20,7 +20,7 @@ use store::Store;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Loopback by default (safe for a single-host/dev setup); a real multi-node
     // deployment needs this reachable from worker nodes, e.g. 0.0.0.0:50052.
-    let addr = std::env::var("BARENETES_LISTEN_ADDR")
+    let addr: std::net::SocketAddr = std::env::var("BARENETES_LISTEN_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:50052".to_string())
         .parse()?;
 
@@ -49,6 +49,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let api_service = ApiService { store };
+
+    // No authentication or TLS on this service: everyone who can reach `addr`
+    // can create/delete pods, register nodes, etc. Loopback is implicitly
+    // safe; anything else needs the operator to have already restricted
+    // reachability (VPN, firewall, private overlay network).
+    if !addr.ip().is_loopback() {
+        tracing::warn!(
+            %addr,
+            "listening on a non-loopback address with no authentication or TLS -- \
+             make sure this is only reachable from a trusted network"
+        );
+    }
 
     tracing::info!(%addr, "API server starting");
 

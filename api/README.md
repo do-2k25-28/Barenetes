@@ -21,3 +21,10 @@ worker agents need to reach this over the network, so override it:
 ```
 BARENETES_LISTEN_ADDR=0.0.0.0:50052 cargo run -p api
 ```
+
+**No authentication or TLS**: every RPC (create/delete pods, register nodes,
+...) is open to anyone who can reach the listen address, in plaintext. This
+is fine on loopback. Once you set `BARENETES_LISTEN_ADDR` to anything else,
+you are responsible for restricting reachability yourself -- a private
+overlay network, a firewall, a VPN -- never expose it on a public interface.
+The server logs a warning at startup if it detects a non-loopback address.
