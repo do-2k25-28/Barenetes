@@ -1,0 +1,34 @@
+[Unit]
+Description=Barenetes API server (control plane)
+Documentation=https://github.com/do-2k25-28/Barenetes
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/barenetes-api
+WorkingDirectory=/usr/local/bin
+
+# Written by deploy/install.sh. Holds RUST_LOG and, when --with-etcd or
+# --etcd-endpoints was used, BARENETES_ETCD_ENDPOINTS. Absent means the
+# in-memory store (fine for a single control-plane node / demo use).
+EnvironmentFile=-/etc/barenetes/api.env
+
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=2
+
+# No root needed: pure gRPC server, no privileged syscalls, no local state
+# beyond an optional remote etcd connection.
+DynamicUser=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+RestrictRealtime=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

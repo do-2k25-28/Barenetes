@@ -1,0 +1,41 @@
+[Unit]
+Description=Barenetes CNI network daemon (worker node)
+Documentation=https://github.com/do-2k25-28/Barenetes
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Root is required: the daemon manages Linux bridges, VLANs, a VXLAN
+# overlay, and firewall/NAT rules directly via `ip`/`bridge`/iptables.
+User=root
+ExecStart=/usr/local/bin/barenetes-cni
+WorkingDirectory=/usr/local/bin
+
+# Written by deploy/install.sh. BARENETES_NODE_ID defaults to 0 for
+# single-node setups. Multi-node VXLAN overlay requires setting it
+# (0-255, unique per node) along with BARENETES_NODE_IP and
+# BARENETES_REMOTE_NODE_IPS -- see deploy/install.sh --node-id/--node-ip/
+# --remote-node-ips.
+EnvironmentFile=-/etc/barenetes/cni.env
+
+# cni::run() installs a SIGINT handler to remove the unix socket on
+# shutdown, so ask systemd to send that instead of the default SIGTERM.
+KillSignal=SIGINT
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=2
+
+# Creates/owns /var/lib/barenetes/cni (BARENETES_CNI_IP_POOL_DIR /
+# BARENETES_CNI_STATE_DIR default under here), writable even under
+# ProtectSystem=strict.
+StateDirectory=barenetes/cni
+StateDirectoryMode=0750
+
+# Creates /run/barenetes so the daemon can bind BARENETES_CNI_SOCKET at
+# its default of /run/barenetes/cni.sock, where the agent expects it.
+RuntimeDirectory=barenetes
+RuntimeDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,38 @@
+[Unit]
+Description=Barenetes agent (kubelet equivalent, worker node)
+Documentation=https://github.com/do-2k25-28/Barenetes
+After=network-online.target containerd.service barenetes-cni.service
+Wants=network-online.target barenetes-cni.service
+Requires=containerd.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/barenetes-agent
+WorkingDirectory=/usr/local/bin
+
+# Written by deploy/install.sh. Holds RUST_LOG and, if the default clashes
+# with something else on this host, BARENETES_AGENT_ADDR (defaults to
+# 127.0.0.1:50053, distinct from the API server's 127.0.0.1:50052 so both
+# can run on the same host in an all-in-one deployment).
+EnvironmentFile=-/etc/barenetes/agent.env
+
+Restart=on-failure
+RestartSec=2
+
+# Creates/owns /var/lib/barenetes/agent, matching AGENT_STATE_DIR in
+# agent/src/main.rs, writable even under ProtectSystem=strict.
+StateDirectory=barenetes/agent
+StateDirectoryMode=0750
+
+# Hardening (kept lighter than api/scheduler since this needs root and
+# talks to containerd/CNI sockets under /run).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+RestrictRealtime=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

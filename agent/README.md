@@ -12,22 +12,13 @@ cargo build -p agent
 
 ```sh
 sudo target/debug/agent
-# Kubelet service starting on 127.0.0.1:50052
+# Kubelet service starting on 127.0.0.1:50053
 ```
 
-## Build
-
-From the repository root:
+Override the bind address with `--addr` or `BARENETES_AGENT_ADDR`:
 
 ```sh
-cargo build -p agent
-```
-
-## Run
-
-```sh
-sudo target/debug/agent
-# Kubelet service starting on 127.0.0.1:50052
+sudo target/debug/agent --addr 127.0.0.1:60053
 ```
 
 ## Start an nginx pod
@@ -92,7 +83,7 @@ grpcurl -plaintext \
           }
         }
       }' \
-  127.0.0.1:50052 agent.v1.Kubelet/ApplyPod
+  127.0.0.1:50053 agent.v1.Kubelet/ApplyPod
 # { "podId": "default-web" }
 ```
 
@@ -102,7 +93,7 @@ And delete it:
 grpcurl -plaintext \
   -import-path proto -proto agent/v1/kubelet.proto \
   -d '{ "podId": "default-web", "gracePeriodSeconds": 5, "force": false }' \
-  127.0.0.1:50052 agent.v1.Kubelet/DeletePod
+  127.0.0.1:50053 agent.v1.Kubelet/DeletePod
 # { "success": true }
 ```
 
