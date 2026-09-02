@@ -124,6 +124,14 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
 }
 
+# `enable --now` is a no-op start on a unit that's already running, so a
+# re-run that only changed the env file (e.g. new CNI overlay params)
+# wouldn't actually pick it up. Always restart explicitly instead.
+enable_and_restart() {
+  systemctl enable "$1"
+  systemctl restart "$1"
+}
+
 # "latest" isn't a valid git ref for raw.githubusercontent.com, so unit
 # files fetched over the network (no local checkout) need a concrete tag.
 # Binary downloads avoid this entirely via the /releases/latest/download/
@@ -199,7 +207,7 @@ install_etcd() {
 
   fetch_unit_file "etcd.service" "${UNIT_DIR}/etcd.service"
   systemctl daemon-reload
-  systemctl enable --now etcd.service
+  enable_and_restart etcd.service
   INSTALLED_UNITS+=("etcd.service")
 }
 
@@ -245,8 +253,8 @@ install_control_plane() {
   INSTALLED_UNITS+=("barenetes-scheduler.service")
 
   systemctl daemon-reload
-  systemctl enable --now barenetes-api.service
-  systemctl enable --now barenetes-scheduler.service
+  enable_and_restart barenetes-api.service
+  enable_and_restart barenetes-scheduler.service
 }
 
 install_worker() {
@@ -278,8 +286,8 @@ install_worker() {
   INSTALLED_UNITS+=("barenetes-agent.service")
 
   systemctl daemon-reload
-  systemctl enable --now barenetes-cni.service
-  systemctl enable --now barenetes-agent.service
+  enable_and_restart barenetes-cni.service
+  enable_and_restart barenetes-agent.service
 }
 
 main() {
