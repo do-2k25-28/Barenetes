@@ -12,7 +12,10 @@
 //!         [--container <name>:<ACTIVE|CRASHED|WAITING>]
 //!     cargo run -p api --example api_cli -- list-pods
 //!     cargo run -p api --example api_cli -- get-pod <name> [--namespace <ns>]
+//!
+//! Point it at a non-default API server with --addr or BARENETES_API_ADDR.
 
+use clap::Parser;
 use proto::api::v1::api_server_client::ApiServerClient;
 use proto::api::v1::{
     AssignPodRequest, CreatePodRequest, DeletePodRequest, GetNodeRequest, GetPodRequest,
@@ -24,7 +27,19 @@ use proto::shared::v1::{
     State,
 };
 
-const API: &str = "http://127.0.0.1:50052";
+#[derive(Parser)]
+struct Cli {
+    /// Address of the API server
+    #[arg(
+        long,
+        env = "BARENETES_API_ADDR",
+        default_value = "http://127.0.0.1:50052"
+    )]
+    addr: String,
+
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    args: Vec<String>,
+}
 
 fn find_numeric_flag(args: &[String], flag: &str) -> Result<Option<i32>, String> {
     let pos = match args.iter().position(|a| a == flag) {
@@ -41,7 +56,8 @@ fn find_numeric_flag(args: &[String], flag: &str) -> Result<Option<i32>, String>
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let cli = Cli::parse();
+    let args = cli.args;
 
     // validate subcommand before connecting so bad usage shows help
     // instead of a connection error.
@@ -98,7 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(2);
     }
 
-    let mut client = ApiServerClient::connect(API).await?;
+    let mut client = ApiServerClient::connect(cli.addr).await?;
 
     match sub {
         Some("list-nodes") => {

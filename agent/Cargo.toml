@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+clap = { version = "4.6.6", features = ["derive", "env"] }
 containerd-client = "0.9.0"
 prost-types = "0.14.4"
 proto = { path = "../proto" }

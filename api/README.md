@@ -16,7 +16,10 @@ With etcd (persistent storage):
 BARENETES_ETCD_ENDPOINTS=http://127.0.0.1:2379 cargo run -p api
 ```
 
-Starts listening on `127.0.0.1:50052`.
+Starts listening on `127.0.0.1:50052`. Override with `--addr` or `BARENETES_API_ADDR`:
+```
+cargo run -p api -- --addr 127.0.0.1:60052
+```
 
 ## RPCs
 
