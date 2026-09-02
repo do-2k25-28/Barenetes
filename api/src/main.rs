@@ -10,15 +10,25 @@ mod validation;
 use std::sync::Arc;
 use std::time::Duration;
 
+use clap::Parser;
 use proto::api::v1::api_server_server::ApiServerServer;
 use tonic::transport::Server;
 
 use service::ApiService;
 use store::Store;
 
+#[derive(Parser)]
+#[command(name = "api", version, about = "Barenetes API server")]
+struct Cli {
+    /// Address to bind the API server on
+    #[arg(long, env = "BARENETES_API_ADDR", default_value = "127.0.0.1:50052")]
+    addr: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let addr = "127.0.0.1:50052".parse()?;
+    let cli = Cli::parse();
+    let addr = cli.addr.parse()?;
 
     tracing_subscriber::fmt()
         .with_env_filter(
