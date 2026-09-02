@@ -688,6 +688,44 @@ impl Store {
         }
     }
 
+    /// Snapshots every current node and subscribes to future node events, so
+    /// a scheduler that just (re)connected has the full capacity picture
+    /// immediately instead of waiting for the next node event. See
+    /// `subscribe_pod_events_with_snapshot` for why in-memory mode holds the
+    /// read lock across the subscribe call.
+    pub async fn subscribe_node_events_with_snapshot(
+        &self,
+    ) -> Result<(Vec<Node>, broadcast::Receiver<WatchNodeEvent>), StoreError> {
+        if let Some(ref client) = self.client {
+            let resp = client
+                .clone()
+                .get(
+                    nodes_prefix(),
+                    Some(etcd_client::GetOptions::default().with_prefix()),
+                )
+                .await?;
+            let nodes = resp
+                .kvs()
+                .iter()
+                .filter_map(|kv| {
+                    Node::decode(kv.value())
+                        .map_err(|e| {
+                            let key = String::from_utf8_lossy(kv.key());
+                            tracing::warn!(key = %key, error = %e, "skipping undecodable node in node-watch snapshot");
+                        })
+                        .ok()
+                })
+                .collect();
+            let receiver = self.node_events.subscribe();
+            Ok((nodes, receiver))
+        } else {
+            let nodes_guard = self.nodes.read().await;
+            let nodes = nodes_guard.values().cloned().collect();
+            let receiver = self.node_events.subscribe();
+            Ok((nodes, receiver))
+        }
+    }
+
     pub async fn publish_desired_state_event(
         &self,
         node_name: &str,

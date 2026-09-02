@@ -1,7 +1,7 @@
 /// Scheduler-facing watches and placement write-back.
 use proto::api::v1::{
-    AssignPodRequest, AssignPodResponse, WatchDesiredStateEvent, WatchNodesRequest, WatchPodEvent,
-    WatchPodsRequest, assign_pod_request, watch_desired_state_event,
+    AssignPodRequest, AssignPodResponse, WatchDesiredStateEvent, WatchNodeEvent, WatchNodesRequest,
+    WatchPodEvent, WatchPodsRequest, assign_pod_request, watch_desired_state_event,
 };
 use proto::shared::v1::EventType;
 use tokio_stream::StreamExt;
@@ -38,12 +38,21 @@ impl ApiService {
         &self,
         _request: Request<WatchNodesRequest>,
     ) -> Result<Response<NodeEventStream>, Status> {
-        let receiver = self.store.subscribe_node_events();
+        let (nodes, receiver) = self
+            .store
+            .subscribe_node_events_with_snapshot()
+            .await
+            .map_err(|e| e.to_status())?;
 
-        Ok(Response::new(crate::service::broadcast_to_stream(
-            receiver,
-            "watch_nodes",
-        )))
+        let opening = tokio_stream::iter(nodes.into_iter().map(|node| {
+            Ok(WatchNodeEvent {
+                event_type: EventType::Added as i32,
+                node: Some(node),
+            })
+        }));
+        let live = crate::service::broadcast_to_stream(receiver, "watch_nodes");
+
+        Ok(Response::new(Box::pin(opening.chain(live))))
     }
 
     pub async fn assign_pod_impl(
@@ -228,6 +237,32 @@ mod tests {
             event_type: EventType::Added as i32,
             node: Some(node.clone()),
         });
+
+        let event = stream
+            .next()
+            .await
+            .expect("stream ended")
+            .expect("event should not be an error");
+
+        assert_eq!(event.node, Some(node));
+        assert_eq!(event.event_type, EventType::Added as i32);
+    }
+
+    #[tokio::test]
+    async fn test_watch_nodes_replays_existing_nodes_before_subscribing() {
+        let service = test_support::service();
+        let node = test_support::node("node-1", NodeStatus::Ready);
+        service
+            .store
+            .upsert_and_publish_node(node.clone())
+            .await
+            .unwrap();
+
+        let mut stream = service
+            .watch_nodes_impl(Request::new(WatchNodesRequest {}))
+            .await
+            .unwrap()
+            .into_inner();
 
         let event = stream
             .next()
