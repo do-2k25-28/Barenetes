@@ -105,9 +105,16 @@ impl KubeletService {
                 workload, network, pid
             );
 
-            // Attach the running container to its isolated tenant network.
+            // Attach the running container to its isolated tenant network,
+            // forwarding whatever host<->container port mappings it declared.
             self.cni
-                .add_network(workload.clone(), network.clone(), pid, DEFAULT_INTERFACE)
+                .add_network(
+                    workload.clone(),
+                    network.clone(),
+                    pid,
+                    DEFAULT_INTERFACE,
+                    container.ports.clone(),
+                )
                 .await?;
         }
         Ok(())
