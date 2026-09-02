@@ -642,6 +642,52 @@ impl Store {
         self.node_events.subscribe()
     }
 
+    /// Snapshots pods that still need a placement decision (no `node_name`
+    /// yet) and subscribes to future pod events, so a scheduler that just
+    /// (re)connected sees pods that were already pending before it started
+    /// watching — their one-time Added event fired before anyone was
+    /// listening. In-memory mode subscribes before releasing the read lock:
+    /// a write can't land between "read current state" and "start
+    /// listening," since it needs that same lock to publish (see
+    /// `update_and_publish_pod`).
+    pub async fn subscribe_pod_events_with_snapshot(
+        &self,
+    ) -> Result<(Vec<PodDetail>, broadcast::Receiver<WatchPodEvent>), StoreError> {
+        if let Some(ref client) = self.client {
+            let resp = client
+                .clone()
+                .get(
+                    pods_prefix(),
+                    Some(etcd_client::GetOptions::default().with_prefix()),
+                )
+                .await?;
+            let pending = resp
+                .kvs()
+                .iter()
+                .filter_map(|kv| {
+                    PodDetail::decode(kv.value())
+                        .map_err(|e| {
+                            let key = String::from_utf8_lossy(kv.key());
+                            tracing::warn!(key = %key, error = %e, "skipping undecodable pod in pod-watch snapshot");
+                        })
+                        .ok()
+                })
+                .filter(|pod| pod.node_name.is_empty())
+                .collect();
+            let receiver = self.pod_events.subscribe();
+            Ok((pending, receiver))
+        } else {
+            let pods = self.pods.read().await;
+            let pending = pods
+                .values()
+                .filter(|pod| pod.node_name.is_empty())
+                .cloned()
+                .collect();
+            let receiver = self.pod_events.subscribe();
+            Ok((pending, receiver))
+        }
+    }
+
     pub async fn publish_desired_state_event(
         &self,
         node_name: &str,

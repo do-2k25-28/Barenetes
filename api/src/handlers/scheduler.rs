@@ -1,9 +1,10 @@
 /// Scheduler-facing watches and placement write-back.
 use proto::api::v1::{
-    AssignPodRequest, AssignPodResponse, WatchDesiredStateEvent, WatchNodesRequest,
+    AssignPodRequest, AssignPodResponse, WatchDesiredStateEvent, WatchNodesRequest, WatchPodEvent,
     WatchPodsRequest, assign_pod_request, watch_desired_state_event,
 };
 use proto::shared::v1::EventType;
+use tokio_stream::StreamExt;
 use tonic::{Request, Response, Status};
 
 use crate::service::{ApiService, NodeEventStream, PodEventStream};
@@ -13,12 +14,24 @@ impl ApiService {
         &self,
         _request: Request<WatchPodsRequest>,
     ) -> Result<Response<PodEventStream>, Status> {
-        let receiver = self.store.subscribe_pod_events();
+        let (pending, receiver) = self
+            .store
+            .subscribe_pod_events_with_snapshot()
+            .await
+            .map_err(|e| e.to_status())?;
 
-        Ok(Response::new(crate::service::broadcast_to_stream(
-            receiver,
-            "watch_pods",
-        )))
+        // Pods already pending before this watch started only ever fired
+        // their one Added event in the past, so replay them as Added here —
+        // that's the only event type the scheduler acts on.
+        let opening = tokio_stream::iter(pending.into_iter().map(|pod| {
+            Ok(WatchPodEvent {
+                event_type: EventType::Added as i32,
+                pod: Some(pod),
+            })
+        }));
+        let live = crate::service::broadcast_to_stream(receiver, "watch_pods");
+
+        Ok(Response::new(Box::pin(opening.chain(live))))
     }
 
     pub async fn watch_nodes_impl(
@@ -147,6 +160,58 @@ mod tests {
 
         assert_eq!(event.pod, Some(pod));
         assert_eq!(event.event_type, EventType::Added as i32);
+    }
+
+    #[tokio::test]
+    async fn test_watch_pods_replays_pending_pods_created_before_subscribing() {
+        let service = test_support::service();
+        let pod = test_support::pod_detail("default", "already-pending");
+        service.store.upsert_pod(pod.clone()).await.unwrap();
+
+        let mut stream = service
+            .watch_pods_impl(Request::new(WatchPodsRequest {}))
+            .await
+            .unwrap()
+            .into_inner();
+
+        let event = stream
+            .next()
+            .await
+            .expect("stream ended")
+            .expect("event should not be an error");
+
+        assert_eq!(event.pod, Some(pod));
+        assert_eq!(event.event_type, EventType::Added as i32);
+    }
+
+    #[tokio::test]
+    async fn test_watch_pods_snapshot_excludes_already_scheduled_pods() {
+        let service = test_support::service();
+        let mut scheduled = test_support::pod_detail("default", "already-scheduled");
+        scheduled.node_name = "node-a".to_string();
+        service.store.upsert_pod(scheduled).await.unwrap();
+
+        let mut stream = service
+            .watch_pods_impl(Request::new(WatchPodsRequest {}))
+            .await
+            .unwrap()
+            .into_inner();
+
+        // The snapshot should have been skipped entirely: the first thing the
+        // stream produces is this later live event, not the scheduled pod.
+        let pending = test_support::pod_detail("default", "pending");
+        service.store.publish_pod_event(WatchPodEvent {
+            event_type: EventType::Added as i32,
+            pod: Some(pending.clone()),
+        });
+
+        let event = stream
+            .next()
+            .await
+            .expect("stream ended")
+            .expect("event should not be an error");
+
+        assert_eq!(event.pod, Some(pending));
     }
 
     #[tokio::test]
