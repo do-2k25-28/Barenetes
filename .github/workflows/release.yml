@@ -39,7 +39,10 @@ jobs:
           toolchain: stable
           rustflags: ""
 
-      # proto/build.rs uses protoc_bin_vendored, no system protoc needed.
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build workspace binaries (release)
         run: cargo build --workspace --release --locked
 
