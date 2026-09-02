@@ -18,7 +18,11 @@ use store::Store;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let addr = "127.0.0.1:50052".parse()?;
+    // Loopback by default (safe for a single-host/dev setup); a real multi-node
+    // deployment needs this reachable from worker nodes, e.g. 0.0.0.0:50052.
+    let addr = std::env::var("BARENETES_LISTEN_ADDR")
+        .unwrap_or_else(|_| "127.0.0.1:50052".to_string())
+        .parse()?;
 
     tracing_subscriber::fmt()
         .with_env_filter(

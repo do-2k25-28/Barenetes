@@ -16,11 +16,8 @@ With etcd (persistent storage):
 BARENETES_ETCD_ENDPOINTS=http://127.0.0.1:2379 cargo run -p api
 ```
 
-Starts listening on `127.0.0.1:50052`.
-
-## RPCs
-
-`delete_pod`, `watch_pods`, `watch_nodes`, `assign_pod`, and `watch_desired_state`
-are still unimplemented (`Status::unimplemented`). Everything else is implemented.
-TODO: replace the body of the remaining `*_impl` methods in each file. The routing
-in `src/service.rs` is already wired up and shouldn't need to change.
+Listens on `127.0.0.1:50052` by default. For a real multi-node deployment,
+worker agents need to reach this over the network, so override it:
+```
+BARENETES_LISTEN_ADDR=0.0.0.0:50052 cargo run -p api
+```
