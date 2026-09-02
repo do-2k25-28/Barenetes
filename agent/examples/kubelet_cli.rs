@@ -2,17 +2,33 @@
 //!
 //!     cargo run -p agent --example kubelet_cli -- apply <pod> <image> [image...]
 //!     cargo run -p agent --example kubelet_cli -- delete <pod-id> [--force]
+//!
+//! Point it at a non-default kubelet with --addr or BARENETES_AGENT_ADDR.
 
+use clap::Parser;
 use proto::agent::v1::kubelet_client::KubeletClient;
 use proto::agent::v1::{ApplyPodRequest, DeletePodRequest};
 use proto::shared::v1::{Container, Pod, PodSpec, PodWithSpec};
 
-const KUBELET: &str = "http://127.0.0.1:50053";
+#[derive(Parser)]
+struct Cli {
+    /// Address of the kubelet service
+    #[arg(
+        long,
+        env = "BARENETES_AGENT_ADDR",
+        default_value = "http://127.0.0.1:50053"
+    )]
+    addr: String,
+
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    args: Vec<String>,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let mut client = KubeletClient::connect(KUBELET).await?;
+    let cli = Cli::parse();
+    let args = cli.args;
+    let mut client = KubeletClient::connect(cli.addr).await?;
 
     match args.first().map(String::as_str) {
         Some("apply") if args.len() >= 3 => {
