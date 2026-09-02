@@ -42,6 +42,7 @@ impl Cni {
         network: NetworkRef,
         pid: u32,
         interface_name: &str,
+        port_mappings: Vec<proto::shared::v1::Port>,
     ) -> Result<WorkloadNetwork, Status> {
         let response = self
             .client()
@@ -51,7 +52,7 @@ impl Cni {
                 network: Some(network),
                 netns_path: format!("/proc/{pid}/ns/net"),
                 interface_name: interface_name.to_string(),
-                port_mappings: Vec::new(),
+                port_mappings,
             }))
             .await?
             .into_inner();
