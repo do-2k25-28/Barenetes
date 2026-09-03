@@ -99,6 +99,17 @@ This needs a cgroup v2 hierarchy mounted at `/sys/fs/cgroup`, and an agent
 allowed to write to it. Applying a pod that declares limits on a host without
 one fails; pods without limits get no cgroup of their own.
 
+`apply` failing with `cannot set up the cgroup of <pod>: /sys/fs/cgroup/...:
+Read-only file system` means the agent sees cgroupfs read-only. Either it runs
+under a systemd unit with `ProtectControlGroups=` on (the shipped
+`barenetes-agent.service` deliberately leaves it off), or it runs inside a
+container that mounts `/sys/fs/cgroup` read-only. Check with:
+
+```sh
+findmnt -o TARGET,OPTIONS /sys/fs/cgroup
+sudo cat /proc/$(pgrep -x barenetes-agent)/mountinfo | grep ' /sys/fs/cgroup '
+```
+
 ## Using a generic gRPC client instead of `kubelet_cli`
 
 `kubelet_cli` is only a convenience wrapper, the kubelet exposes a plain gRPC

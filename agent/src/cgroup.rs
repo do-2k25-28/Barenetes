@@ -58,10 +58,10 @@ pub fn create_pod(pod_id: &str, limits: Option<&Resources>) -> io::Result<()> {
     }
 
     let slice = root.join(SLICE);
-    std::fs::create_dir_all(&slice)?;
+    mkdir(&slice)?;
     delegate(root)?;
     delegate(&slice)?;
-    std::fs::create_dir_all(&pod)?;
+    mkdir(&pod)?;
 
     if limits.cpu > 0 {
         write(pod.join("cpu.max"), cpu_max(limits.cpu))?;
@@ -127,6 +127,14 @@ fn cpu_max(cpu: i32) -> String {
 
 fn memory_bytes(memory: i32) -> i64 {
     i64::from(memory) * 1024 * 1024
+}
+
+/// Both of these name the directory they failed on: the usual failures here
+/// (a read-only cgroupfs in a container, a hardened unit, a non-root agent)
+/// are impossible to place from a bare errno.
+fn mkdir(dir: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(dir)
+        .map_err(|error| io::Error::new(error.kind(), format!("{}: {error}", dir.display())))
 }
 
 fn write(file: PathBuf, value: String) -> io::Result<()> {
