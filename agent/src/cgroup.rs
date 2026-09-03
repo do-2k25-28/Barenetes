@@ -29,6 +29,9 @@ const CPU_PERIOD: i64 = 100_000;
 /// below this is rejected with EINVAL.
 const CPU_MIN_QUOTA: i64 = 1000;
 
+/// What an unlimited resource reads as in every cgroup file that takes one.
+const MAX: &str = "max";
+
 /// Controllers a pod cgroup needs. A cgroup can only use the ones its parent
 /// hands down, so they are enabled on every ancestor of the pod cgroup.
 const CONTROLLERS: &str = "+cpu +memory";
@@ -42,14 +45,18 @@ pub fn pod_path(pod_id: &str) -> String {
 /// Create the cgroup of a pod and write `limits` to it.
 ///
 /// Containers started afterwards under `pod_path(pod_id)` are capped by it, all
-/// of them together. Pods without limits get no cgroup of their own here: runc
-/// creates whatever the container leaves need, unconfigured.
+/// of them together.
 pub fn create_pod(pod_id: &str, limits: Option<&Resources>) -> io::Result<()> {
-    let Some(limits) = limits.filter(|limits| limits.cpu > 0 || limits.memory > 0) else {
-        return Ok(());
-    };
-
     let pod = pod_dir(pod_id)?;
+    let limits = limits.filter(|limits| limits.cpu > 0 || limits.memory > 0);
+
+    // Nothing to enforce, and no cgroup left over from a previous revision of
+    // the pod to clear: leave the hierarchy alone, runc creates what the
+    // container leaves need.
+    if limits.is_none() && !pod.exists() {
+        return Ok(());
+    }
+
     let root = Path::new(CGROUP_ROOT);
     if !root.join("cgroup.controllers").exists() {
         return Err(io::Error::other(format!(
@@ -63,16 +70,8 @@ pub fn create_pod(pod_id: &str, limits: Option<&Resources>) -> io::Result<()> {
     delegate(&slice)?;
     mkdir(&pod)?;
 
-    if limits.cpu > 0 {
-        write(pod.join("cpu.max"), cpu_max(limits.cpu))?;
-    }
-    if limits.memory > 0 {
-        write(
-            pod.join("memory.max"),
-            memory_bytes(limits.memory).to_string(),
-        )?;
-        // Without this the pod walks around its memory limit by swapping.
-        write(pod.join("memory.swap.max"), "0".to_string())?;
+    for (file, value) in limit_files(limits) {
+        write(pod.join(file), value)?;
     }
 
     Ok(())
@@ -116,6 +115,38 @@ fn delegate(cgroup: &Path) -> io::Result<()> {
         cgroup.join("cgroup.subtree_control"),
         CONTROLLERS.to_string(),
     )
+}
+
+/// The limit files of a pod cgroup, and what `limits` puts in them.
+///
+/// A limit that is not set is written as `max` rather than left alone. Every
+/// apply then lands the pod on exactly the limits it declares, whatever the
+/// cgroup of its previous revision was holding.
+fn limit_files(limits: Option<&Resources>) -> [(&'static str, String); 3] {
+    let cpu = limits.map(|limits| limits.cpu).filter(|cpu| *cpu > 0);
+    let memory = limits
+        .map(|limits| limits.memory)
+        .filter(|memory| *memory > 0);
+
+    [
+        (
+            "cpu.max",
+            cpu.map_or_else(|| format!("max {CPU_PERIOD}"), cpu_max),
+        ),
+        (
+            "memory.max",
+            memory.map_or_else(
+                || MAX.to_string(),
+                |memory| memory_bytes(memory).to_string(),
+            ),
+        ),
+        // Swap is pinned to 0 under a memory limit, otherwise the pod walks
+        // around the limit by swapping.
+        (
+            "memory.swap.max",
+            memory.map_or_else(|| MAX.to_string(), |_| "0".to_string()),
+        ),
+    ]
 }
 
 /// `cpu.max` is a quota over a period: the cgroup gets `quota` microseconds of
@@ -166,16 +197,59 @@ mod tests {
         assert_eq!(cpu_max(5), format!("{CPU_MIN_QUOTA} {CPU_PERIOD}"));
     }
 
+    fn value_of(limits: Option<&Resources>, file: &str) -> String {
+        limit_files(limits)
+            .into_iter()
+            .find(|(name, _)| *name == file)
+            .expect("no such limit file")
+            .1
+    }
+
+    #[test]
+    fn test_a_pod_without_limits_resets_every_file_to_max() {
+        assert_eq!(value_of(None, "cpu.max"), format!("max {CPU_PERIOD}"));
+        assert_eq!(value_of(None, "memory.max"), "max");
+        assert_eq!(value_of(None, "memory.swap.max"), "max");
+    }
+
+    #[test]
+    fn test_dropping_one_limit_leaves_the_other_alone() {
+        let cpu_only = Resources {
+            cpu: 500,
+            memory: 0,
+        };
+
+        assert_eq!(
+            value_of(Some(&cpu_only), "cpu.max"),
+            format!("50000 {CPU_PERIOD}")
+        );
+        assert_eq!(value_of(Some(&cpu_only), "memory.max"), "max");
+    }
+
+    #[test]
+    fn test_a_memory_limit_pins_swap_to_zero() {
+        let memory_only = Resources {
+            cpu: 0,
+            memory: 512,
+        };
+
+        assert_eq!(value_of(Some(&memory_only), "memory.swap.max"), "0");
+        assert_eq!(value_of(None, "memory.swap.max"), "max");
+    }
+
     #[test]
     fn test_memory_is_converted_to_bytes() {
         assert_eq!(memory_bytes(512), 512 * 1024 * 1024);
     }
 
     #[test]
-    fn test_pods_without_limits_get_no_cgroup() {
-        // Would hit /sys/fs/cgroup if it did anything at all.
-        assert!(create_pod("default.web", None).is_ok());
-        assert!(create_pod("default.web", Some(&Resources { cpu: 0, memory: 0 })).is_ok());
+    fn test_a_pod_without_limits_and_without_a_cgroup_is_left_alone() {
+        // Writes nothing, so it stays a no-op even on a host with a cgroup v2
+        // hierarchy this test cannot write to.
+        let unknown = "test.no-such-pod";
+
+        assert!(create_pod(unknown, None).is_ok());
+        assert!(create_pod(unknown, Some(&Resources { cpu: 0, memory: 0 })).is_ok());
     }
 
     #[test]
