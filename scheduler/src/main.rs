@@ -1,7 +1,8 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use proto::api::v1::api_server_client::ApiServerClient;
 use proto::api::v1::{AssignPodRequest, WatchNodesRequest, WatchPodsRequest, assign_pod_request};
@@ -45,14 +46,25 @@ async fn main() -> Result<()> {
 
     let state = Arc::new(Mutex::new(SchedulerState::default()));
 
-    let nodes_task = tokio::spawn(watch_nodes(client.clone(), state.clone()));
-    let pods_task = tokio::spawn(watch_pods(client.clone(), state.clone()));
+    supervise_watchers(
+        watch_nodes(client.clone(), state.clone()),
+        watch_pods(client, state),
+    )
+    .await
+}
 
-    let (nodes_result, pods_result) = tokio::try_join!(nodes_task, pods_task)?;
-    nodes_result?;
-    pods_result?;
-
-    Ok(())
+/// Both watches are required for the scheduler to work. If either one stops,
+/// return its result and cancel the other rather than leaving the process
+/// running with only half of its state being updated.
+async fn supervise_watchers<N, P>(nodes: N, pods: P) -> Result<()>
+where
+    N: Future<Output = Result<()>>,
+    P: Future<Output = Result<()>>,
+{
+    tokio::select! {
+        result = nodes => result.context("node watcher failed"),
+        result = pods => result.context("pod watcher failed"),
+    }
 }
 
 /// Keeps the scheduler's node view current and retries any pod that
@@ -204,4 +216,49 @@ async fn try_schedule(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    use super::*;
+
+    struct DropSignal(Arc<AtomicBool>);
+
+    impl Drop for DropSignal {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn watcher_error_is_returned_and_pending_sibling_is_cancelled() {
+        let sibling_cancelled = Arc::new(AtomicBool::new(false));
+        let drop_signal = DropSignal(sibling_cancelled.clone());
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            supervise_watchers(
+                async { Err(anyhow::anyhow!("node stream failed")) },
+                async move {
+                    let _drop_signal = drop_signal;
+                    std::future::pending::<Result<()>>().await
+                },
+            ),
+        )
+        .await
+        .expect("supervisor should not wait for the healthy watcher")
+        .expect_err("watcher failure should be returned");
+
+        assert_eq!(
+            format!("{result:#}"),
+            "node watcher failed: node stream failed"
+        );
+        assert!(
+            sibling_cancelled.load(Ordering::SeqCst),
+            "pending watcher should be cancelled"
+        );
+    }
 }
