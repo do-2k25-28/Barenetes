@@ -58,13 +58,12 @@ impl Containerd {
     /// Pull `container.image` and start it as `<pod>-<container.name>`,
     /// returning the pid of the container process.
     ///
-    /// `limits` are the resource limits of the pod, enforced by the cgroup runc
-    /// creates for the container.
+    /// The container runs in a leaf cgroup of the pod cgroup, so the limits of
+    /// the pod cover it together with its siblings.
     pub async fn run_container(
         &self,
         pod: &str,
         container: &proto::shared::v1::Container,
-        limits: Option<&proto::shared::v1::Resources>,
     ) -> Result<Pid, Status> {
         let id = container_id(pod, &container.name);
 
@@ -93,7 +92,8 @@ impl Containerd {
                 .iter()
                 .map(|e| format!("{}={}", e.name, e.value)),
         );
-        let spec = crate::oci::spec(&id, &config.args, &env, &config.cwd, limits);
+        let cgroup = format!("{}/{id}", crate::cgroup::pod_path(pod));
+        let spec = crate::oci::spec(&id, &config.args, &env, &config.cwd, &cgroup);
 
         ContainersClient::new(self.channel())
             .create(with_namespace!(

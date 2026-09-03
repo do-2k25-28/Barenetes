@@ -3,6 +3,7 @@ use clap::Parser;
 use proto::agent::v1::kubelet_server::KubeletServer;
 use tonic::transport::Server;
 
+mod cgroup;
 mod cni;
 mod containerd;
 mod desired_state;

@@ -72,15 +72,32 @@ cargo run -p agent --example kubelet_cli -- apply web docker.io/library/nginx:al
 `--memory` is in megabytes. Leave a flag out to leave that resource
 unlimited.
 
-The agent turns these into a cgroup for the container. A CPU limit is set as
-a quota over a period: the container gets `quota` microseconds of CPU time
-out of every `period` microseconds. The agent uses a 100ms period, so the
-quota is `cpu * 100000 / 1000`.
+Limits belong to the pod, not to its containers. The agent enforces them on a
+single cgroup per pod, `/sys/fs/cgroup/barenetes/<pod-id>`, and runs every
+container of the pod in its own leaf cgroup underneath it:
 
-The kernel rejects any quota below 1000 microseconds. Limits under 10
-millicores would compute a smaller quota than that, so the agent rounds
-them up to 1000 microseconds instead of letting the container fail to
-start.
+```
+/sys/fs/cgroup/barenetes/default.web        <- cpu.max, memory.max live here
+├── default.web-app
+└── default.web-sidecar
+```
+
+The kernel accounts a cgroup for all of its descendants, so the containers of
+the pod share the one budget: a pod limited to 500 mCPU gets half a core in
+total, however many containers it spreads it over.
+
+A CPU limit is written as a quota over a period: the pod gets `quota`
+microseconds of CPU time out of every `period` microseconds. The agent uses a
+100ms period, so the quota is `cpu * 100000 / 1000`. The kernel rejects any
+quota below 1000 microseconds, so limits under 10 millicores are rounded up to
+that instead of failing to start.
+
+A memory limit is written to `memory.max`, with `memory.swap.max` pinned to 0
+so the pod cannot walk around the limit by swapping.
+
+This needs a cgroup v2 hierarchy mounted at `/sys/fs/cgroup`, and an agent
+allowed to write to it. Applying a pod that declares limits on a host without
+one fails; pods without limits get no cgroup of their own.
 
 ## Using a generic gRPC client instead of `kubelet_cli`
 
