@@ -60,6 +60,28 @@ cargo run -p agent --example kubelet_cli -- delete default-web
 # deleted: true
 ```
 
+## Resource limits
+
+`kubelet_cli apply` takes optional `--cpu` and `--memory` flags:
+
+```sh
+cargo run -p agent --example kubelet_cli -- apply web docker.io/library/nginx:alpine --cpu 500 --memory 256
+```
+
+`--cpu` is in millicores. 1000 means one full core, 500 means half a core.
+`--memory` is in megabytes. Leave a flag out to leave that resource
+unlimited.
+
+The agent turns these into a cgroup for the container. A CPU limit is set as
+a quota over a period: the container gets `quota` microseconds of CPU time
+out of every `period` microseconds. The agent uses a 100ms period, so the
+quota is `cpu * 100000 / 1000`.
+
+The kernel rejects any quota below 1000 microseconds. Limits under 10
+millicores would compute a smaller quota than that, so the agent rounds
+them up to 1000 microseconds instead of letting the container fail to
+start.
+
 ## Using a generic gRPC client instead of `kubelet_cli`
 
 `kubelet_cli` is only a convenience wrapper, the kubelet exposes a plain gRPC
