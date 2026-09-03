@@ -108,3 +108,23 @@ rather not use the script — copy the ones you need to
 `/etc/systemd/system/`, drop the matching env file in `/etc/barenetes/`
 (see each unit's `EnvironmentFile=`), then `systemctl daemon-reload &&
 systemctl enable --now <unit>`.
+
+## Uninstalling
+
+```sh
+sudo ./deploy/uninstall.sh
+```
+
+Stops and disables every installed component (control-plane, worker, and a
+locally-installed etcd if present), removes their systemd units and
+binaries, and tears down the bridge/VXLAN/VLAN interfaces and iptables
+chains `barenetes-cni` set up. Safe to re-run, and safe to run on a host
+that only ever had some of the components installed — anything not found is
+skipped.
+
+Config (`/etc/barenetes`) and persisted state (`/var/lib/barenetes`,
+`/var/lib/etcd`) are left in place by default. Add `--purge` to remove
+those too — irreversible, since it drops etcd data, CNI IP pool
+allocations, and agent VLAN allocations. Use `--role control-plane|worker|
+etcd` to scope the removal instead of the `all` default. Run
+`./deploy/uninstall.sh --help` for the full flag reference.
