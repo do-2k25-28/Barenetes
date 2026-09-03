@@ -28,6 +28,9 @@ pub enum CliError {
         source: serde_yaml::Error,
     },
 
+    #[error("could not write command output: {0}")]
+    WriteOutput(#[source] std::io::Error),
+
     #[error("{0}")]
     InvalidUsage(String),
 
