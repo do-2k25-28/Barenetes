@@ -4,8 +4,7 @@ use std::process::{Command, Stdio};
 
 const TOOL_DIRECTORIES: &[&str] = &["/usr/sbin", "/sbin", "/usr/bin", "/bin"];
 
-// Leaves room for the 50 bytes of VXLAN encapsulation.
-const DEFAULT_MTU: u32 = 1450;
+const DEFAULT_MTU: u32 = 1500;
 
 pub(crate) fn mtu() -> io::Result<u32> {
     let Some(value) = std::env::var("BARENETES_MTU")

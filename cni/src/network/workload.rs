@@ -87,7 +87,7 @@ pub(crate) fn add_workload_network(
         &network.network_name,
     );
     let peer_interface = format!("p{}", &host_interface[1..]);
-    let address_with_prefix = format!("{address}/16");
+    let address_with_prefix = format!("{address}/24");
     let pid_string = pid.to_string();
     let interface_mtu = mtu()?.to_string();
 

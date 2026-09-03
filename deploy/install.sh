@@ -21,8 +21,8 @@
 #                                      (required for --role worker; default:
 #                                      http://127.0.0.1:50052 for control-plane/all)
 #   --node-id N                       CNI BARENETES_NODE_ID, 0-255 (worker/all; default: 0)
-#   --node-ip IP                      CNI BARENETES_NODE_IP (worker/all, for multi-node VXLAN overlay)
-#   --remote-node-ips IP[,IP...]      CNI BARENETES_REMOTE_NODE_IPS (worker/all, for multi-node overlay)
+#   --remote-node-ips IP[,IP...]      underlay IPs of remote worker nodes
+#   --remote-node-ids ID[,ID...]      node IDs matching --remote-node-ips
 #   -h, --help                        Show this help and exit
 #
 # --role all installs both control-plane and worker components on the same
@@ -39,8 +39,8 @@ ETCD_ENDPOINTS=""
 SERVER="http://127.0.0.1:50052"
 SERVER_SET=false
 NODE_ID=""
-NODE_IP=""
 REMOTE_NODE_IPS=""
+REMOTE_NODE_IDS=""
 PREFIX="/usr/local/bin"
 CONF_DIR="/etc/barenetes"
 UNIT_DIR="/etc/systemd/system"
@@ -80,8 +80,8 @@ Options:
                                      (required for --role worker; default:
                                      http://127.0.0.1:50052 for control-plane/all)
   --node-id N                       CNI BARENETES_NODE_ID, 0-255 (worker/all; default: 0)
-  --node-ip IP                      CNI BARENETES_NODE_IP (worker/all, for multi-node VXLAN overlay)
-  --remote-node-ips IP[,IP...]      CNI BARENETES_REMOTE_NODE_IPS (worker/all, for multi-node overlay)
+  --remote-node-ips IP[,IP...]      underlay IPs of remote worker nodes
+  --remote-node-ids ID[,ID...]      node IDs matching --remote-node-ips
   -h, --help                        Show this help and exit
 
 --role all installs both control-plane and worker components on the same
@@ -101,8 +101,8 @@ parse_args() {
       --etcd-endpoints) ETCD_ENDPOINTS="$2"; shift 2 ;;
       --server) SERVER="$2"; SERVER_SET=true; shift 2 ;;
       --node-id) NODE_ID="$2"; shift 2 ;;
-      --node-ip) NODE_IP="$2"; shift 2 ;;
       --remote-node-ips) REMOTE_NODE_IPS="$2"; shift 2 ;;
+      --remote-node-ids) REMOTE_NODE_IDS="$2"; shift 2 ;;
       -h|--help) usage; exit 0 ;;
       *) die "unknown option: $1 (see --help)" ;;
     esac
@@ -135,7 +135,7 @@ require_cmd() {
 }
 
 # `enable --now` is a no-op start on a unit that's already running, so a
-# re-run that only changed the env file (e.g. new CNI overlay params)
+# re-run that only changed the env file (e.g. new CNI routing params)
 # wouldn't actually pick it up. Always restart explicitly instead.
 enable_and_restart() {
   systemctl enable "$1"
@@ -282,8 +282,8 @@ install_worker() {
   {
     echo "RUST_LOG=info"
     [[ -n "$NODE_ID" ]] && echo "BARENETES_NODE_ID=${NODE_ID}"
-    [[ -n "$NODE_IP" ]] && echo "BARENETES_NODE_IP=${NODE_IP}"
     [[ -n "$REMOTE_NODE_IPS" ]] && echo "BARENETES_REMOTE_NODE_IPS=${REMOTE_NODE_IPS}"
+    [[ -n "$REMOTE_NODE_IDS" ]] && echo "BARENETES_REMOTE_NODE_IDS=${REMOTE_NODE_IDS}"
   } > "${CONF_DIR}/cni.env"
 
   install_binary cni
