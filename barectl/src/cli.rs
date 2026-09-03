@@ -16,21 +16,53 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Create a pod with a single container
-    #[command(name = "createPod")]
-    CreatePod(CreatePodArgs),
+    /// Create a resource
+    Create(CreateArgs),
 
+    /// Display one or many resources
+    Get(GetArgs),
+
+    /// Delete a resource
+    Delete(DeleteArgs),
+}
+
+#[derive(Args)]
+pub struct CreateArgs {
+    #[command(subcommand)]
+    pub resource: CreateResource,
+}
+
+#[derive(Subcommand)]
+pub enum CreateResource {
+    /// Create a pod
+    Pod(CreatePodArgs),
+}
+
+#[derive(Args)]
+pub struct GetArgs {
+    #[command(subcommand)]
+    pub resource: GetResource,
+}
+
+#[derive(Subcommand)]
+pub enum GetResource {
     /// List pods validating filters
-    #[command(name = "getPod")]
-    GetPod(GetPodArgs),
-
-    /// Delete a pod by name and optional namespace
-    #[command(name = "deletePod")]
-    DeletePod(DeletePodArgs),
+    Pod(GetPodArgs),
 
     /// Fetch all nodes / one node by name
-    #[command(name = "getNode")]
-    GetNode(GetNodeArgs),
+    Node(GetNodeArgs),
+}
+
+#[derive(Args)]
+pub struct DeleteArgs {
+    #[command(subcommand)]
+    pub resource: DeleteResource,
+}
+
+#[derive(Subcommand)]
+pub enum DeleteResource {
+    /// Delete a pod by name and optional namespace
+    Pod(DeletePodArgs),
 }
 
 #[derive(Args)]
