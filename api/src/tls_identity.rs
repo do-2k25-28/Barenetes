@@ -70,7 +70,10 @@ pub(crate) fn peer<T>(request: &Request<T>) -> Peer {
     let Some(tls_info) = request.extensions().get::<TlsConnectInfo<TcpConnectInfo>>() else {
         return Peer::Plaintext;
     };
-    let Some(leaf) = tls_info.peer_certs().and_then(|certs| certs.first().cloned()) else {
+    let Some(leaf) = tls_info
+        .peer_certs()
+        .and_then(|certs| certs.first().cloned())
+    else {
         return Peer::Plaintext;
     };
     let Ok((_, cert)) = x509_parser::parse_x509_certificate(leaf.as_ref()) else {
@@ -140,7 +143,9 @@ pub(crate) fn check_identity(peer: &Peer, node_name: &str) -> Result<(), Status>
 pub(crate) fn check_role(peer: &Peer, expected: Role) -> Result<(), Status> {
     match peer {
         Peer::Plaintext => Ok(()),
-        Peer::Mtls { role: Some(role), .. } if *role == expected => Ok(()),
+        Peer::Mtls {
+            role: Some(role), ..
+        } if *role == expected => Ok(()),
         Peer::Mtls {
             role: Some(role), ..
         } => Err(crate::errors::role_denied(role.as_str(), expected.as_str())),
