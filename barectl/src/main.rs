@@ -5,23 +5,30 @@ mod commands;
 mod error;
 mod manifest;
 
-use cli::{Cli, Commands, CreateResource, DeleteResource, GetResource};
+use cli::{Cli, Commands, CreateResource, DeleteResource, GetResource, generate_completions};
 
 #[tokio::main]
 async fn main() {
-    let cli = Cli::parse();
+    let Cli { server, command } = Cli::parse();
 
-    let result = match cli.command {
+    let result = match command {
         Commands::Create(args) => match args.resource {
-            CreateResource::Pod(args) => commands::create_pod(&cli.server, args).await,
+            CreateResource::Pod(args) => commands::create_pod(&server, args).await,
         },
         Commands::Get(args) => match args.resource {
-            GetResource::Pod(args) => commands::get_pod(&cli.server, args).await,
-            GetResource::Node(args) => commands::get_node(&cli.server, args).await,
+            GetResource::Pod(args) => commands::get_pod(&server, args).await,
+            GetResource::Node(args) => commands::get_node(&server, args).await,
         },
         Commands::Delete(args) => match args.resource {
-            DeleteResource::Pod(args) => commands::delete_pod(&cli.server, args).await,
+            DeleteResource::Pod(args) => commands::delete_pod(&server, args).await,
         },
+        Commands::Completion(args) => {
+            match generate_completions(args.shell, &mut std::io::stdout()) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+                Err(error) => Err(error::CliError::WriteOutput(error)),
+            }
+        }
     };
 
     if let Err(err) = result {
