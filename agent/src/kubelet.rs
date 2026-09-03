@@ -262,6 +262,18 @@ fn pod_id(namespace: &str, pod_name: &str) -> String {
     format!("{namespace}.{pod_name}")
 }
 
+/// Same id `apply_pod` would compute for a `PodWithSpec`, empty-namespace default
+/// included, so a caller building a `DeletePodRequest` from desired state matches
+/// whatever id the pod is actually running under.
+pub(crate) fn resolve_pod_id(namespace: &str, pod_name: &str) -> String {
+    let namespace = if namespace.is_empty() {
+        DEFAULT_NAMESPACE
+    } else {
+        namespace
+    };
+    pod_id(namespace, pod_name)
+}
+
 /// Recovers the namespace encoded at the start of a pod id.
 fn namespace_of(pod_id: &str) -> &str {
     pod_id

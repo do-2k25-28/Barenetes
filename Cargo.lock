@@ -6,6 +6,7 @@ version = 4
 name = "agent"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "clap",
  "containerd-client",
  "prost-types",
@@ -14,6 +15,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "tokio-stream",
  "tonic",
 ]
 
