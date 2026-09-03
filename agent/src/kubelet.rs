@@ -83,6 +83,7 @@ impl KubeletService {
     async fn create_containers(
         &self,
         containers: &[proto::shared::v1::Container],
+        limits: Option<&proto::shared::v1::Resources>,
         pod_id: &str,
         namespace: &str,
         vlan: u32,
@@ -98,7 +99,10 @@ impl KubeletService {
                 vlan_id: vlan,
             };
 
-            let pid = self.containerd.run_container(pod_id, container).await?;
+            let pid = self
+                .containerd
+                .run_container(pod_id, container, limits)
+                .await?;
 
             println!(
                 "Workload: {:?} | Network: {:?} | PID: {:?}",
@@ -134,11 +138,14 @@ impl Kubelet for KubeletService {
             .pod
             .ok_or_else(|| Status::invalid_argument("missing pod"))?;
         let spec = pod.spec.unwrap_or_default();
-        let pod_name = pod
-            .pod
-            .map(|p| p.name)
-            .filter(|name| !name.is_empty())
-            .ok_or_else(|| Status::invalid_argument("missing pod name"))?;
+        let core = pod.pod.unwrap_or_default();
+        if core.name.is_empty() {
+            return Err(Status::invalid_argument("missing pod name"));
+        }
+        let pod_name = core.name;
+        // Limits are declared for the whole pod, but the cgroups runc creates
+        // are per container, so every container of the pod is capped at them.
+        let limits = core.limits;
 
         // Container names end up in the container ids, so they must be set and unique
         let mut names = HashSet::new();
@@ -181,7 +188,7 @@ impl Kubelet for KubeletService {
             .await?;
 
         let outcome = self
-            .create_containers(&spec.containers, &pod_id, namespace, vlan)
+            .create_containers(&spec.containers, limits.as_ref(), &pod_id, namespace, vlan)
             .await;
         if outcome.is_err() {
             self.rollback(&pod_id, namespace, &spec.containers, vlan)
