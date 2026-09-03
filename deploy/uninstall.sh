@@ -12,6 +12,10 @@
 #                                           /var/lib/barenetes, /var/lib/etcd (state) --
 #                                           irreversible: drops etcd data, CNI IP pool
 #                                           allocations, and agent VLAN allocations
+#   --force                                Tear down worker network state even if
+#                                           containerd still has running workloads
+#                                           in the "barenetes" namespace (severs
+#                                           their networking immediately)
 #   -h, --help                             Show this help and exit
 #
 # `--role all` (the default) removes every Barenetes component found on the
@@ -21,6 +25,7 @@ set -euo pipefail
 
 ROLE="all"
 PURGE=false
+FORCE=false
 PREFIX="/usr/local/bin"
 CONF_DIR="/etc/barenetes"
 STATE_DIR="/var/lib/barenetes"
@@ -49,6 +54,10 @@ Options:
                                           /var/lib/barenetes, /var/lib/etcd (state) --
                                           irreversible: drops etcd data, CNI IP pool
                                           allocations, and agent VLAN allocations
+  --force                                Tear down worker network state even if
+                                          containerd still has running workloads
+                                          in the "barenetes" namespace (severs
+                                          their networking immediately)
   -h, --help                             Show this help and exit
 
 `--role all` (the default) removes every Barenetes component found on the
@@ -62,6 +71,7 @@ parse_args() {
     case "$1" in
       --role) ROLE="$2"; shift 2 ;;
       --purge) PURGE=true; shift ;;
+      --force) FORCE=true; shift ;;
       -h|--help) usage; exit 0 ;;
       *) die "unknown option: $1 (see --help)" ;;
     esac
@@ -111,17 +121,38 @@ uninstall_control_plane() {
   remove_unit barenetes-scheduler.service
   remove_binary barenetes-api
   remove_binary barenetes-scheduler
-  rm -f "${CONF_DIR}/api.env" "${CONF_DIR}/scheduler.env"
 }
 
 uninstall_worker() {
   log "Removing worker components: cni, agent"
+  check_running_workloads
   remove_unit barenetes-agent.service
   remove_unit barenetes-cni.service
   remove_binary barenetes-agent
   remove_binary barenetes-cni
-  rm -f "${CONF_DIR}/agent.env" "${CONF_DIR}/cni.env"
   remove_network_state
+}
+
+# Tearing down the bridge/VXLAN/veths below severs networking for any
+# container containerd is still running under the "barenetes" namespace
+# (agent/src/containerd.rs NAMESPACE) -- confirmed on a live cluster to
+# strand running pods (the next agent/cni to start then drops their record
+# as "host interface is gone" instead of reconciling them). Refuse unless
+# the caller acknowledges the disruption with --force.
+check_running_workloads() {
+  command -v ctr >/dev/null 2>&1 || return 0
+
+  local running
+  running="$(ctr --namespace barenetes tasks ls 2>/dev/null | awk 'NR>1 && $3=="RUNNING" {print $1}')"
+  [[ -n "$running" ]] || return 0
+
+  if [[ "$FORCE" == true ]]; then
+    log "warning: containerd namespace 'barenetes' still has running workloads, tearing down network state anyway (--force):"
+    printf '  %s\n' $running >&2
+    return 0
+  fi
+
+  die "refusing to remove worker network state: containerd namespace 'barenetes' has running workloads ($(printf '%s ' $running)). Drain/stop them first (e.g. remove the pods via the API so the scheduler reschedules them elsewhere), or re-run with --force to tear down anyway -- this immediately cuts their networking and abandons them."
 }
 
 # barenetes-cni manages Linux bridge/VXLAN/VLAN interfaces and iptables
@@ -175,6 +206,17 @@ remove_network_state() {
     iptables -t filter -D FORWARD -j BARENETES-FORWARD 2>/dev/null || true
     iptables -t filter -F BARENETES-FORWARD 2>/dev/null || true
     iptables -t filter -X BARENETES-FORWARD 2>/dev/null || true
+
+    # Per-tenant MASQUERADE rules live directly in POSTROUTING, not in a
+    # BARENETES-* chain (ensure_tenant_nat() in firewall.rs appends one per
+    # VLAN: "-s 10.<vlan>.<node>.0/24 ! -o barenetes0+ -j MASQUERADE").
+    # There's no fixed count/chain to -F/-X, so find and -D each by pattern.
+    local rule tokens
+    while IFS= read -r rule; do
+      [[ -n "$rule" ]] || continue
+      read -ra tokens <<<"$rule"
+      iptables -t nat -D POSTROUTING "${tokens[@]:2}" 2>/dev/null || true
+    done < <(iptables -t nat -S POSTROUTING 2>/dev/null | grep -F -- '-o barenetes0+' | grep -F -- '-j MASQUERADE')
   fi
 
   # ensure_egress() sets this on every barenetes-cni start; left enabled
