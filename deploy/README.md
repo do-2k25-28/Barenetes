@@ -122,6 +122,16 @@ CA and the certificates it issues live under `/etc/barenetes/pki/`:
   files): leaf certificates for the two control-plane services, issued
   with `barenetes-pki issue`.
 
+Every leaf certificate authenticates against the same CA, so the API
+server also checks a `--role` recorded on the certificate (independent of
+its `--cn`) to decide which RPCs it's authorized to call: `api` (never
+itself a caller), `scheduler` (`WatchPods`/`WatchNodes`/`AssignPod`), `cli`
+(`CreatePod`/`DeletePod`/`GetPod`/`ListPods`/`GetNode`/`ListNodes`), and
+`node` (the agent-facing RPCs, still further checked against `--cn`
+matching the claimed `node_name`). A certificate with no role, or the wrong
+one for the RPC it's calling, is rejected -- a worker's certificate cannot
+call `CreatePod` just because it holds a cert signed by the cluster CA.
+
 `barenetes-api.service`/`barenetes-scheduler.service` run under
 `DynamicUser=true`, so they can't read the 0600 key files directly; the
 units instead use systemd's `LoadCredential=` to hand those files to their
@@ -138,7 +148,7 @@ A worker's agent stays plaintext by default. To give it a certificate:
 
   ```sh
   sudo barenetes-pki issue --ca-dir /etc/barenetes/pki/ca \
-    --cn worker-1 --out-dir /tmp/worker-1-pki
+    --cn worker-1 --role node --out-dir /tmp/worker-1-pki
   ```
 
   Copy `/etc/barenetes/pki/ca/ca.pem` and the two files from
@@ -152,6 +162,28 @@ A worker's agent stays plaintext by default. To give it a certificate:
 
 Certificate rotation isn't automated; re-issuing and restarting the
 affected service is a manual step for now.
+
+### Giving `barectl` a certificate
+
+The installer doesn't provision one automatically, since `barectl` runs as
+whatever operator or automation needs cluster access, not as a fixed
+service on a fixed host. Issue one from the control plane the same way as a
+worker's, with `--role cli`:
+
+```sh
+sudo barenetes-pki issue --ca-dir /etc/barenetes/pki/ca \
+  --cn alice --role cli --out-dir /tmp/alice-pki
+```
+
+Copy `ca.pem` and the two files from `/tmp/alice-pki/` wherever `barectl`
+runs, then pass them on every invocation (or set the matching
+`BARENETES_TLS_*` env vars):
+
+```sh
+barectl --server https://<control-plane-ip>:50052 \
+  --tls-cert alice.pem --tls-key alice-key.pem --tls-ca ca.pem \
+  --tls-server-name api get pods
+```
 
 ## What it doesn't do
 

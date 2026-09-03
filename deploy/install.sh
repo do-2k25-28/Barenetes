@@ -270,10 +270,10 @@ ensure_control_plane_pki() {
     "${PREFIX}/barenetes-pki" init-ca --out-dir "$PKI_CA_DIR"
   fi
   if [[ ! -f "${PKI_ISSUED_DIR}/api.pem" ]]; then
-    "${PREFIX}/barenetes-pki" issue --ca-dir "$PKI_CA_DIR" --cn api --out-dir "$PKI_ISSUED_DIR"
+    "${PREFIX}/barenetes-pki" issue --ca-dir "$PKI_CA_DIR" --cn api --role api --out-dir "$PKI_ISSUED_DIR"
   fi
   if [[ ! -f "${PKI_ISSUED_DIR}/scheduler.pem" ]]; then
-    "${PREFIX}/barenetes-pki" issue --ca-dir "$PKI_CA_DIR" --cn scheduler --out-dir "$PKI_ISSUED_DIR"
+    "${PREFIX}/barenetes-pki" issue --ca-dir "$PKI_CA_DIR" --cn scheduler --role scheduler --out-dir "$PKI_ISSUED_DIR"
   fi
 }
 
@@ -349,7 +349,7 @@ setup_worker_pki() {
   if [[ -n "$CA_DIR" ]]; then
     [[ -f "${CA_DIR}/ca.pem" ]] || die "--ca-dir ${CA_DIR} is missing ca.pem"
     [[ -f "${CA_DIR}/${NODE_NAME}.pem" && -f "${CA_DIR}/${NODE_NAME}-key.pem" ]] \
-      || die "--ca-dir ${CA_DIR} is missing ${NODE_NAME}.pem/${NODE_NAME}-key.pem for this node. Issue them on the control plane first with: barenetes-pki issue --ca-dir <path-to-ca> --cn ${NODE_NAME} --out-dir <dir>, then copy them here next to ca.pem (never copy ca-key.pem to a worker)."
+      || die "--ca-dir ${CA_DIR} is missing ${NODE_NAME}.pem/${NODE_NAME}-key.pem for this node. Issue them on the control plane first with: barenetes-pki issue --ca-dir <path-to-ca> --cn ${NODE_NAME} --role node --out-dir <dir>, then copy them here next to ca.pem (never copy ca-key.pem to a worker)."
     # Copied into /etc/barenetes/pki rather than read from --ca-dir in
     # place: that directory is operator-chosen and typically lands under
     # $HOME, which barenetes-agent.service's ProtectHome=true hides from
@@ -365,7 +365,7 @@ setup_worker_pki() {
     install_binary pki
     install -d -m 0755 "$PKI_ISSUED_DIR"
     if [[ ! -f "${PKI_ISSUED_DIR}/${NODE_NAME}.pem" ]]; then
-      "${PREFIX}/barenetes-pki" issue --ca-dir "$PKI_CA_DIR" --cn "$NODE_NAME" --out-dir "$PKI_ISSUED_DIR"
+      "${PREFIX}/barenetes-pki" issue --ca-dir "$PKI_CA_DIR" --cn "$NODE_NAME" --role node --out-dir "$PKI_ISSUED_DIR"
     fi
     tls_cert="${PKI_ISSUED_DIR}/${NODE_NAME}.pem"
     tls_key="${PKI_ISSUED_DIR}/${NODE_NAME}-key.pem"

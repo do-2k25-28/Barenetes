@@ -1,6 +1,7 @@
 //! Drives a real TLS-terminated `ApiServerServer` over the network, so the
-//! mTLS peer-identity check added in api/src/tls_identity.rs is proven at
-//! the transport level, not just against a bare `Request` in a unit test.
+//! mTLS peer-identity and per-RPC role checks in api/src/tls_identity.rs
+//! are proven at the transport level, not just against a bare `Request` in
+//! a unit test.
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -57,10 +58,13 @@ fn make_ca() -> (String, String) {
 }
 
 /// A leaf cert signed by `ca_pem`/`ca_key_pem`, mirroring `barenetes-pki
-/// issue`. Re-parses the CA key from PEM for every call (rather than taking
-/// it by value) so the same CA can issue multiple leaves, same as the real
-/// tool does by re-reading ca-key.pem each invocation.
-fn issue(ca_pem: &str, ca_key_pem: &str, cn: &str) -> GeneratedCert {
+/// issue --role`. Re-parses the CA key from PEM for every call (rather than
+/// taking it by value) so the same CA can issue multiple leaves, same as
+/// the real tool does by re-reading ca-key.pem each invocation. `role` is
+/// `None` for a server cert (its DN is never inspected by the role check,
+/// which only ever looks at the peer/client cert) and `Some("node" |
+/// "scheduler" | "cli")` for a client cert exercising `check_role`.
+fn issue(ca_pem: &str, ca_key_pem: &str, cn: &str, role: Option<&str>) -> GeneratedCert {
     let ca_key = KeyPair::from_pem(ca_key_pem).unwrap();
     let issuer = Issuer::from_ca_cert_pem(ca_pem, ca_key).unwrap();
 
@@ -68,6 +72,9 @@ fn issue(ca_pem: &str, ca_key_pem: &str, cn: &str) -> GeneratedCert {
     params.is_ca = IsCa::ExplicitNoCa;
     let mut dn = DistinguishedName::new();
     dn.push(DnType::CommonName, cn);
+    if let Some(role) = role {
+        dn.push(DnType::OrganizationalUnitName, role);
+    }
     params.distinguished_name = dn;
 
     let leaf_key = KeyPair::generate().unwrap();
@@ -140,8 +147,8 @@ fn update_node_status_request(node_name: &str) -> UpdateNodeStatusRequest {
 #[tokio::test]
 async fn matching_client_cert_and_node_name_is_accepted() {
     let (ca_pem, ca_key_pem) = make_ca();
-    let server_cert = issue(&ca_pem, &ca_key_pem, "test-server");
-    let client_cert = issue(&ca_pem, &ca_key_pem, "node-a");
+    let server_cert = issue(&ca_pem, &ca_key_pem, "test-server", None);
+    let client_cert = issue(&ca_pem, &ca_key_pem, "node-a", Some("node"));
 
     let (addr, _server) = start_mtls_server(Arc::new(Store::new()), &server_cert, &ca_pem).await;
     let mut client = mtls_client(addr, &client_cert, &ca_pem, "test-server").await;
@@ -156,9 +163,9 @@ async fn matching_client_cert_and_node_name_is_accepted() {
 #[tokio::test]
 async fn mismatched_node_name_is_rejected_as_impersonation() {
     let (ca_pem, ca_key_pem) = make_ca();
-    let server_cert = issue(&ca_pem, &ca_key_pem, "test-server");
+    let server_cert = issue(&ca_pem, &ca_key_pem, "test-server", None);
     // The client authenticates as node-a but claims to be node-b.
-    let client_cert = issue(&ca_pem, &ca_key_pem, "node-a");
+    let client_cert = issue(&ca_pem, &ca_key_pem, "node-a", Some("node"));
 
     let (addr, _server) = start_mtls_server(Arc::new(Store::new()), &server_cert, &ca_pem).await;
     let mut client = mtls_client(addr, &client_cert, &ca_pem, "test-server").await;
@@ -169,6 +176,76 @@ async fn mismatched_node_name_is_rejected_as_impersonation() {
         .expect_err("a node_name that doesn't match the client cert must be rejected");
 
     assert_eq!(status.code(), Code::PermissionDenied);
+}
+
+#[tokio::test]
+async fn identity_with_no_cn_or_san_is_rejected_rather_than_treated_as_plaintext() {
+    let (ca_pem, ca_key_pem) = make_ca();
+    let server_cert = issue(&ca_pem, &ca_key_pem, "test-server", None);
+    // No CN and no DNS SAN: `CertificateParams::new(vec![])` issues a leaf
+    // with an empty subject alt name list and no common name set below.
+    let ca_key = KeyPair::from_pem(&ca_key_pem).unwrap();
+    let issuer = Issuer::from_ca_cert_pem(&ca_pem, ca_key).unwrap();
+    let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
+    params.is_ca = IsCa::ExplicitNoCa;
+    params.distinguished_name = {
+        let mut dn = DistinguishedName::new();
+        dn.push(DnType::OrganizationalUnitName, "node");
+        dn
+    };
+    let leaf_key = KeyPair::generate().unwrap();
+    let cert = params.signed_by(&leaf_key, &issuer).unwrap();
+    let client_cert = GeneratedCert {
+        pem: cert.pem(),
+        key_pem: leaf_key.serialize_pem(),
+    };
+
+    let (addr, _server) = start_mtls_server(Arc::new(Store::new()), &server_cert, &ca_pem).await;
+    let mut client = mtls_client(addr, &client_cert, &ca_pem, "test-server").await;
+
+    let status = client
+        .update_node_status(update_node_status_request("node-a"))
+        .await
+        .expect_err("a cert with no CN/SAN must not be able to claim any node_name");
+
+    assert_eq!(status.code(), Code::PermissionDenied);
+}
+
+#[tokio::test]
+async fn a_node_role_certificate_cannot_call_a_scheduler_only_rpc() {
+    use proto::api::v1::WatchNodesRequest;
+
+    let (ca_pem, ca_key_pem) = make_ca();
+    let server_cert = issue(&ca_pem, &ca_key_pem, "test-server", None);
+    // Every cluster certificate is signed by the same CA; only the OU
+    // (role) tells node-a's cert apart from the scheduler's.
+    let client_cert = issue(&ca_pem, &ca_key_pem, "node-a", Some("node"));
+
+    let (addr, _server) = start_mtls_server(Arc::new(Store::new()), &server_cert, &ca_pem).await;
+    let mut client = mtls_client(addr, &client_cert, &ca_pem, "test-server").await;
+
+    let status = client
+        .watch_nodes(WatchNodesRequest {})
+        .await
+        .expect_err("a node certificate must not be authorized for a scheduler-only RPC");
+
+    assert_eq!(status.code(), Code::PermissionDenied);
+}
+
+#[tokio::test]
+async fn a_scheduler_role_certificate_can_call_a_scheduler_only_rpc() {
+    use proto::api::v1::WatchNodesRequest;
+
+    let (ca_pem, ca_key_pem) = make_ca();
+    let server_cert = issue(&ca_pem, &ca_key_pem, "test-server", None);
+    let client_cert = issue(&ca_pem, &ca_key_pem, "scheduler", Some("scheduler"));
+
+    let (addr, _server) = start_mtls_server(Arc::new(Store::new()), &server_cert, &ca_pem).await;
+    let mut client = mtls_client(addr, &client_cert, &ca_pem, "test-server").await;
+
+    let response = client.watch_nodes(WatchNodesRequest {}).await;
+
+    assert!(response.is_ok(), "{:?}", response.err());
 }
 
 #[tokio::test]

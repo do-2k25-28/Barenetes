@@ -2,8 +2,9 @@
 //! cluster's private mTLS PKI. Deliberately not a `barectl` subcommand or a
 //! shell script; see docs/mtls-plan.md section 3 for why.
 use std::fs;
+use std::io::Write;
 use std::net::IpAddr;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -48,6 +49,39 @@ struct InitCaArgs {
     days: i64,
 }
 
+/// The cluster role a leaf certificate is authorized for, recorded in its
+/// subject's Organizational Unit. The API server's per-RPC authorization
+/// (see `api/src/tls_identity.rs`) trusts this field, not the CN: CN is the
+/// claimed *identity* (compared against a request's `node_name`), OU is the
+/// claimed *role* (compared against which RPCs that role may call). Every
+/// cluster certificate authenticates against the same CA, so without this
+/// separate field any leaf cert -- including one issued for a worker node --
+/// would be authorized for every RPC.
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum Role {
+    /// The API server's own identity. Never itself a caller of any RPC.
+    Api,
+    /// The scheduler: WatchPods, WatchNodes, AssignPod.
+    Scheduler,
+    /// A human operator or automation driving `barectl`: CreatePod,
+    /// DeletePod, GetPod, ListPods, GetNode, ListNodes.
+    Cli,
+    /// A worker node's agent. `--cn` must be that node's name, since the
+    /// agent-facing RPCs also check CN against the claimed node_name.
+    Node,
+}
+
+impl Role {
+    fn as_str(self) -> &'static str {
+        match self {
+            Role::Api => "api",
+            Role::Scheduler => "scheduler",
+            Role::Cli => "cli",
+            Role::Node => "node",
+        }
+    }
+}
+
 #[derive(Args)]
 struct IssueArgs {
     /// Directory containing ca.pem and ca-key.pem.
@@ -59,6 +93,11 @@ struct IssueArgs {
     /// identity the API server's mTLS handler compares node_name against.
     #[arg(long)]
     cn: String,
+
+    /// The cluster role this certificate is authorized for. Determines
+    /// which RPCs the API server accepts it for, independent of `--cn`.
+    #[arg(long, value_enum)]
+    role: Role,
 
     /// Directory to write <cn>.pem and <cn>-key.pem into.
     #[arg(long)]
@@ -106,10 +145,36 @@ fn main() -> Result<()> {
     }
 }
 
+/// Writes `contents` to `path` with `mode` set from the file's creation, not
+/// after the fact: `fs::write` + `set_permissions` briefly leaves the file at
+/// the default 0666-minus-umask (e.g. 0644 for a normal 022 umask), during
+/// which another local process could read a private key before its
+/// restrictive mode lands. Writing to a sibling temp file created with the
+/// target mode via `OpenOptionsExt::mode`, then renaming it into place,
+/// closes that window and also means a reader never observes a partially
+/// written file.
 fn write_pem(path: &Path, contents: &str, mode: u32) -> Result<()> {
-    fs::write(path, contents).with_context(|| format!("writing {}", path.display()))?;
-    fs::set_permissions(path, fs::Permissions::from_mode(mode))
-        .with_context(|| format!("setting permissions on {}", path.display()))?;
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let tmp_path = dir.join(format!(
+        ".{}.tmp-{}",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("pem"),
+        std::process::id()
+    ));
+
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(mode)
+        .open(&tmp_path)
+        .with_context(|| format!("creating {}", tmp_path.display()))?;
+    file.write_all(contents.as_bytes())
+        .with_context(|| format!("writing {}", tmp_path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("syncing {}", tmp_path.display()))?;
+    fs::rename(&tmp_path, path)
+        .with_context(|| format!("renaming {} to {}", tmp_path.display(), path.display()))?;
     Ok(())
 }
 
@@ -185,6 +250,7 @@ fn issue(args: IssueArgs) -> Result<()> {
     ];
     let mut dn = DistinguishedName::new();
     dn.push(DnType::CommonName, args.cn.clone());
+    dn.push(DnType::OrganizationalUnitName, args.role.as_str());
     params.distinguished_name = dn;
 
     let leaf_key = KeyPair::generate().context("generating leaf key pair")?;
@@ -230,6 +296,7 @@ mod tests {
         issue(IssueArgs {
             ca_dir: ca_dir.clone(),
             cn: "node-a".to_string(),
+            role: Role::Node,
             out_dir: out_dir.clone(),
             sans: vec![],
             days: 397,
@@ -246,6 +313,13 @@ mod tests {
             .and_then(|cn| cn.as_str().ok())
             .unwrap();
         assert_eq!(cn, "node-a");
+        let ou = leaf_x509
+            .subject()
+            .iter_organizational_unit()
+            .next()
+            .and_then(|ou| ou.as_str().ok())
+            .unwrap();
+        assert_eq!(ou, "node");
 
         let ca_pem = fs::read_to_string(ca_dir.join("ca.pem")).unwrap();
         let ca_der = pem_to_der(&ca_pem);

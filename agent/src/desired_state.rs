@@ -34,9 +34,7 @@ pub async fn run(
     // Lazy channels: the actual TCP connect happens on first RPC, not here, so
     // this doesn't race the Kubelet gRPC server's own bind in main().
     let api_channel = build_api_channel(server_addr, &tls)?;
-    let kubelet_channel = Endpoint::from_shared(format!("http://{kubelet_addr}"))
-        .context("invalid local kubelet address")?
-        .connect_lazy();
+    let kubelet_channel = build_kubelet_channel(&kubelet_addr, &tls, &node_name)?;
 
     let mut api = ApiServerClient::new(api_channel);
     let mut kubelet = KubeletClient::new(kubelet_channel);
@@ -64,6 +62,27 @@ fn build_api_channel(server_addr: String, tls: &TlsArgs) -> Result<Channel> {
             )?;
             let endpoint =
                 endpoint.tls_config(load_client_tls_config(&cert, &key, &ca, server_name)?)?;
+            Ok(endpoint.connect_lazy())
+        }
+    }
+}
+
+/// Builds the (lazy) channel to the local Kubelet service, matching whatever
+/// mode `main` started the Kubelet listener in: when mTLS is configured that
+/// listener requires client certificates (see `main`), so this in-process
+/// client must present one too or every `ApplyPod`/`DeletePod` call fails.
+/// The expected server identity is this node's own name: the Kubelet
+/// listener presents the same cert this agent uses as its own client
+/// identity against the API server, since both are the same node.
+fn build_kubelet_channel(kubelet_addr: &str, tls: &TlsArgs, node_name: &str) -> Result<Channel> {
+    match tls_mode(tls)? {
+        TlsMode::Plaintext => Ok(Endpoint::from_shared(format!("http://{kubelet_addr}"))
+            .context("invalid local kubelet address")?
+            .connect_lazy()),
+        TlsMode::Mtls { cert, key, ca } => {
+            let endpoint = Endpoint::from_shared(format!("https://{kubelet_addr}"))
+                .context("invalid local kubelet address")?
+                .tls_config(load_client_tls_config(&cert, &key, &ca, node_name)?)?;
             Ok(endpoint.connect_lazy())
         }
     }

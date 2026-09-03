@@ -24,6 +24,18 @@ pub(crate) fn identity_mismatch(peer: &str, node_name: &str) -> Status {
     ))
 }
 
+pub(crate) fn missing_identity(node_name: &str) -> Status {
+    Status::permission_denied(format!(
+        "mTLS peer certificate has no usable CN/SAN identity; refusing to trust its claim to be node \"{node_name}\""
+    ))
+}
+
+pub(crate) fn role_denied(peer_role: &str, expected_role: &str) -> Status {
+    Status::permission_denied(format!(
+        "mTLS peer role \"{peer_role}\" is not authorized to call this RPC (requires role \"{expected_role}\")"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use tonic::Code;
