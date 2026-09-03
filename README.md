@@ -68,7 +68,7 @@ Barenetes is a Cargo workspace composed of five crates, each mirroring a real Ku
 | ------------------------- | -------------- | ---------------------------------------------------- |
 | `agent`                   | kubelet        | Runs on each node, manages container lifecycle       |
 | `api`                     | kube-apiserver | Central hub : accepts requests and coordinates state |
-| `barectl`                 | kubectl        | CLI to interact with the API server                  |
+| [`barectl`](barectl/README.md) | kubectl        | CLI to interact with the API server                  |
 | `scheduler/reconciliator` | kube-scheduler | Assigns workloads to nodes                           |
 | `cni`                     | CNI plugin     | Manages pod networking                               |
 
