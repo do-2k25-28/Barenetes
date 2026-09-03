@@ -43,6 +43,20 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set crate version from release tag
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '$RELEASE_TAG' is not a valid vX.Y.Z version tag" >&2
+            exit 1
+          fi
+          echo "Setting workspace version to $VERSION (from tag $RELEASE_TAG)"
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+          cargo generate-lockfile
+
       - name: Build workspace binaries (release)
         run: cargo build --workspace --release --locked
 
