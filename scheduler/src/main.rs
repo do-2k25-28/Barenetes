@@ -165,6 +165,11 @@ async fn try_schedule(
         outcome
     };
 
+    let assigned_node = match &outcome {
+        Ok(node_name) => Some(node_name.clone()),
+        Err(_) => None,
+    };
+
     let outcome = match outcome {
         Ok(node_name) => assign_pod_request::Outcome::NodeName(node_name),
         Err(reason) => assign_pod_request::Outcome::UnschedulableReason(reason),
@@ -182,12 +187,19 @@ async fn try_schedule(
     // deleted mid-retry (NotFound) just drops out of `pending`, and any
     // other transient error is logged so the scheduler keeps serving
     // every other pod.
-    if let Err(status) = result {
-        if status.code() == tonic::Code::NotFound {
-            println!("Pod {namespace}/{name} no longer exists, dropping from pending");
-            state.lock().await.pending.remove(&key);
-        } else {
-            println!("AssignPod failed for {namespace}/{name}: {status}");
+    match result {
+        Ok(_) => {
+            if let Some(node_name) = assigned_node {
+                println!("Pod {namespace}/{name} successfully assigned to {node_name}");
+            }
+        }
+        Err(status) => {
+            if status.code() == tonic::Code::NotFound {
+                println!("Pod {namespace}/{name} no longer exists, dropping from pending");
+                state.lock().await.pending.remove(&key);
+            } else {
+                println!("AssignPod failed for {namespace}/{name}: {status}");
+            }
         }
     }
 
