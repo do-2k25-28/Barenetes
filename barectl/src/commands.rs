@@ -125,8 +125,8 @@ pub async fn get_pod(server: &str, args: GetPodArgs) -> Result<(), CliError> {
     pods.sort_by(|a, b| (pod_namespace(a), pod_name(a)).cmp(&(pod_namespace(b), pod_name(b))));
 
     println!(
-        "{:<15} {:<12} {:<10} {:<15} IMAGE",
-        "NAME", "NAMESPACE", "STATUS", "NODE"
+        "{:<15} {:<12} {:<10} {:<15} {:<10} {:<10} IMAGE",
+        "NAME", "NAMESPACE", "STATUS", "NODE", "RAM", "CPU"
     );
     for pod in &pods {
         let images = pod_containers(pod)
@@ -135,12 +135,15 @@ pub async fn get_pod(server: &str, args: GetPodArgs) -> Result<(), CliError> {
             .collect::<Vec<_>>()
             .join(",");
         let status = format!("{:?}", pod_status(pod));
+        let limits = pod_limits(pod);
         println!(
-            "{:<15} {:<12} {:<10} {:<15} {}",
+            "{:<15} {:<12} {:<10} {:<15} {:<10} {:<10} {}",
             pod_name(pod),
             pod_namespace(pod),
             status,
             or_none(&pod.node_name),
+            limits.map_or("-".to_string(), |l| format!("{}Mi", l.memory)),
+            limits.map_or("-".to_string(), |l| format!("{}m", l.cpu)),
             images
         );
     }
@@ -178,6 +181,10 @@ fn pod_containers(pod: &PodDetail) -> &[Container] {
         .and_then(|c| c.spec.as_ref())
         .map(|s| s.containers.as_slice())
         .unwrap_or_default()
+}
+
+fn pod_limits(pod: &PodDetail) -> Option<Resources> {
+    pod.core.as_ref()?.pod.as_ref()?.limits
 }
 
 pub async fn get_node(server: &str, args: GetNodeArgs) -> Result<(), CliError> {
@@ -224,19 +231,20 @@ async fn list_nodes(mut client: ApiServerClient<Channel>) -> Result<(), CliError
     nodes.sort_by(|a, b| a.name.cmp(&b.name));
 
     println!(
-        "{:<20} {:<12} {:<12} {:<12}",
-        "NAME", "STATUS", "CPU", "MEMORY"
+        "{:<20} {:<12} {:<12} {:<12} {:<12} {:<12}",
+        "NAME", "STATUS", "RAM ALLOC", "RAM TOTAL", "CPU ALLOC", "CPU TOTAL"
     );
     for node in &nodes {
         let status = NodeStatus::try_from(node.status).unwrap_or(NodeStatus::NotReady);
-        let cpu = node.capacity.as_ref().map_or(0, |r| r.cpu);
-        let mem = node.capacity.as_ref().map_or(0, |r| r.memory);
+        let (allocated, total) = allocated_and_total(node);
         println!(
-            "{:<20} {:<12} {:<12} {:<12}",
+            "{:<20} {:<12} {:<12} {:<12} {:<12} {:<12}",
             node.name,
             format!("{:?}", status),
-            format!("{}m", cpu),
-            format!("{}Mi", mem),
+            format!("{}Mi", allocated.memory),
+            format!("{}Mi", total.memory),
+            format!("{}m", allocated.cpu),
+            format!("{}m", total.cpu),
         );
     }
 
@@ -245,14 +253,27 @@ async fn list_nodes(mut client: ApiServerClient<Channel>) -> Result<(), CliError
 
 fn print_node(node: &Node) {
     let status = NodeStatus::try_from(node.status).unwrap_or(NodeStatus::NotReady);
+    let (allocated, total) = allocated_and_total(node);
     println!("Name:        {}", node.name);
     println!("Status:      {:?}", status);
-    if let Some(cap) = &node.capacity {
-        println!("Capacity:    cpu={}m, memory={}Mi", cap.cpu, cap.memory);
-    }
-    if let Some(alloc) = &node.allocatable {
-        println!("Allocatable: cpu={}m, memory={}Mi", alloc.cpu, alloc.memory);
-    }
+    println!(
+        "RAM:         allocated={}Mi, total={}Mi",
+        allocated.memory, total.memory
+    );
+    println!(
+        "CPU:         allocated={}m, total={}m",
+        allocated.cpu, total.cpu
+    );
+}
+
+fn allocated_and_total(node: &Node) -> (Resources, Resources) {
+    let total = node.capacity.unwrap_or_default();
+    let free = node.allocatable.unwrap_or(total);
+    let allocated = Resources {
+        cpu: (total.cpu - free.cpu).max(0),
+        memory: (total.memory - free.memory).max(0),
+    };
+    (allocated, total)
 }
 
 fn matches_filters(pod: &PodDetail, args: &GetPodArgs) -> bool {

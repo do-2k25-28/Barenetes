@@ -129,8 +129,22 @@ async fn watch_pods(
         };
         let key = (namespace.clone(), pod.name.clone());
 
-        if event_type == EventType::Deleted || !pod_detail.node_name.is_empty() {
-            state.lock().await.pending.remove(&key);
+        if event_type == EventType::Deleted {
+            let mut guard = state.lock().await;
+            guard.pending.remove(&key);
+            guard.scheduler.release_placement(&namespace, &pod.name);
+            continue;
+        }
+
+        if !pod_detail.node_name.is_empty() {
+            let mut guard = state.lock().await;
+            guard.pending.remove(&key);
+            guard.scheduler.record_placement(
+                &namespace,
+                &pod.name,
+                &pod_detail.node_name,
+                pod.limits.unwrap_or_default(),
+            );
             continue;
         }
 
@@ -167,6 +181,12 @@ async fn try_schedule(
         match &outcome {
             Ok(node_name) => {
                 println!("Scheduling pod {namespace}/{name} on {node_name}");
+                guard.scheduler.record_placement(
+                    namespace,
+                    name,
+                    node_name,
+                    pod.limits.unwrap_or_default(),
+                );
                 guard.pending.remove(&key);
             }
             Err(reason) => {

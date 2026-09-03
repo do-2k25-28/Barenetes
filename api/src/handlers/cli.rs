@@ -4,7 +4,7 @@ use proto::api::v1::{
     GetNodeResponse, GetPodRequest, GetPodResponse, ListNodesRequest, ListNodesResponse,
     ListPodsRequest, ListPodsResponse, WatchDesiredStateEvent, watch_desired_state_event,
 };
-use proto::shared::v1::{PodDetail, PodStatus};
+use proto::shared::v1::{Node, PodDetail, PodStatus, Resources};
 use tonic::{Request, Response, Status};
 
 use crate::service::ApiService;
@@ -137,12 +137,16 @@ impl ApiService {
         request: Request<GetNodeRequest>,
     ) -> Result<Response<GetNodeResponse>, Status> {
         let req = request.into_inner();
-        let node = self
+        let mut node = self
             .store
             .get_node(&req.name)
             .await
             .map_err(|e| e.to_status())?
             .ok_or_else(|| crate::errors::node_not_found(&req.name))?;
+        let pods = self.store.list_pods().await.map_err(|e| e.to_status())?;
+        if let Some(allocatable) = live_allocatable(&node, &pods) {
+            node.allocatable = Some(allocatable);
+        }
         Ok(Response::new(GetNodeResponse { node: Some(node) }))
     }
 
@@ -150,9 +154,32 @@ impl ApiService {
         &self,
         _request: Request<ListNodesRequest>,
     ) -> Result<Response<ListNodesResponse>, Status> {
-        let nodes = self.store.list_nodes().await.map_err(|e| e.to_status())?;
+        let mut nodes = self.store.list_nodes().await.map_err(|e| e.to_status())?;
+        let pods = self.store.list_pods().await.map_err(|e| e.to_status())?;
+        for node in &mut nodes {
+            if let Some(allocatable) = live_allocatable(node, &pods) {
+                node.allocatable = Some(allocatable);
+            }
+        }
         Ok(Response::new(ListNodesResponse { nodes }))
     }
+}
+
+fn live_allocatable(node: &Node, pods: &[PodDetail]) -> Option<Resources> {
+    let capacity = node.capacity?;
+    let allocated = pods
+        .iter()
+        .filter(|pod| pod.node_name == node.name)
+        .filter_map(|pod| pod.core.as_ref()?.pod.as_ref()?.limits)
+        .fold(Resources::default(), |mut sum, limits| {
+            sum.cpu += limits.cpu;
+            sum.memory += limits.memory;
+            sum
+        });
+    Some(Resources {
+        cpu: (capacity.cpu - allocated.cpu).max(0),
+        memory: (capacity.memory - allocated.memory).max(0),
+    })
 }
 
 #[cfg(test)]
@@ -220,6 +247,78 @@ mod tests {
             .expect("get_node on an existing node should succeed");
 
         assert_eq!(response.into_inner().node, Some(node));
+    }
+
+    #[tokio::test]
+    async fn test_get_node_computes_allocatable_from_pods_placed_there() {
+        let service = service();
+        let mut node = test_support::node("node-1", NodeStatus::Ready);
+        node.capacity = Some(Resources {
+            cpu: 1000,
+            memory: 1000,
+        });
+        service
+            .store
+            .upsert_and_publish_node(node)
+            .await
+            .unwrap();
+
+        let mut pod = test_support::pod_detail("default", "web");
+        pod.node_name = "node-1".to_string();
+        pod.core.as_mut().unwrap().pod.as_mut().unwrap().limits = Some(Resources {
+            cpu: 300,
+            memory: 200,
+        });
+        service.store.upsert_pod(pod).await.unwrap();
+
+        let response = service
+            .get_node_impl(get_node_request("node-1"))
+            .await
+            .expect("get_node on an existing node should succeed");
+
+        assert_eq!(
+            response.into_inner().node.unwrap().allocatable,
+            Some(Resources {
+                cpu: 700,
+                memory: 800
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_node_ignores_pods_placed_on_other_nodes() {
+        let service = service();
+        let mut node = test_support::node("node-1", NodeStatus::Ready);
+        node.capacity = Some(Resources {
+            cpu: 1000,
+            memory: 1000,
+        });
+        service
+            .store
+            .upsert_and_publish_node(node)
+            .await
+            .unwrap();
+
+        let mut pod = test_support::pod_detail("default", "web");
+        pod.node_name = "node-2".to_string();
+        pod.core.as_mut().unwrap().pod.as_mut().unwrap().limits = Some(Resources {
+            cpu: 300,
+            memory: 200,
+        });
+        service.store.upsert_pod(pod).await.unwrap();
+
+        let response = service
+            .get_node_impl(get_node_request("node-1"))
+            .await
+            .expect("get_node on an existing node should succeed");
+
+        assert_eq!(
+            response.into_inner().node.unwrap().allocatable,
+            Some(Resources {
+                cpu: 1000,
+                memory: 1000
+            })
+        );
     }
 
     #[tokio::test]

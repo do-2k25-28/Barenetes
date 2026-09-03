@@ -10,9 +10,10 @@ use proto::agent::v1::kubelet_client::KubeletClient;
 use proto::agent::v1::{ApplyPodRequest, DeletePodRequest};
 use proto::api::v1::api_server_client::ApiServerClient;
 use proto::api::v1::{
-    UpdateNodeStatusRequest, WatchDesiredStateRequest, watch_desired_state_event,
+    UpdateNodeStatusRequest, UpdatePodStatusRequest, WatchDesiredStateRequest,
+    watch_desired_state_event,
 };
-use proto::shared::v1::{Node, NodeStatus, Resources};
+use proto::shared::v1::{Node, NodeStatus, PodStatus, PodWithSpec, Resources};
 use tokio_stream::StreamExt;
 use tonic::transport::{Channel, Endpoint};
 
@@ -83,8 +84,20 @@ async fn register_and_watch(
         match event.action() {
             watch_desired_state_event::Action::Run => {
                 let Some(pod) = event.pod else { continue };
-                if let Err(status) = kubelet.apply_pod(ApplyPodRequest { pod: Some(pod) }).await {
-                    eprintln!("agent: failed to apply pod from desired state: {status}");
+                match kubelet.apply_pod(ApplyPodRequest { pod: Some(pod.clone()) }).await {
+                    Ok(_) => {
+                        report_pod_status(api, &pod, PodStatus::Running, None).await;
+                    }
+                    Err(status) => {
+                        eprintln!("agent: failed to apply pod from desired state: {status}");
+                        report_pod_status(
+                            api,
+                            &pod,
+                            PodStatus::Failed,
+                            Some(status.message().to_string()),
+                        )
+                        .await;
+                    }
                 }
             }
             watch_desired_state_event::Action::Stop => {
@@ -116,6 +129,30 @@ async fn register_and_watch(
     }
 
     Ok(())
+}
+
+async fn report_pod_status(
+    api: &mut ApiServerClient<Channel>,
+    pod: &PodWithSpec,
+    observed_status: PodStatus,
+    message: Option<String>,
+) {
+    let mut reported = pod.clone();
+    if let Some(core) = reported.pod.as_mut() {
+        core.status = observed_status as i32;
+    }
+    if let Err(err) = api
+        .update_pod_status(UpdatePodStatusRequest {
+            pod: Some(reported),
+            container_statuses: Vec::new(),
+            pod_ip: None,
+            message,
+            resource_usage: None,
+        })
+        .await
+    {
+        eprintln!("agent: failed to report pod status: {err}");
+    }
 }
 
 /// Reads the node name from `BARENETES_NODE_NAME` if set, else derives one

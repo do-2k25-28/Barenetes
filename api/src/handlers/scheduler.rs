@@ -14,16 +14,13 @@ impl ApiService {
         &self,
         _request: Request<WatchPodsRequest>,
     ) -> Result<Response<PodEventStream>, Status> {
-        let (pending, receiver) = self
+        let (snapshot, receiver) = self
             .store
             .subscribe_pod_events_with_snapshot()
             .await
             .map_err(|e| e.to_status())?;
 
-        // Pods already pending before this watch started only ever fired
-        // their one Added event in the past, so replay them as Added here —
-        // that's the only event type the scheduler acts on.
-        let opening = tokio_stream::iter(pending.into_iter().map(|pod| {
+        let opening = tokio_stream::iter(snapshot.into_iter().map(|pod| {
             Ok(WatchPodEvent {
                 event_type: EventType::Added as i32,
                 pod: Some(pod),
@@ -194,11 +191,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_watch_pods_snapshot_excludes_already_scheduled_pods() {
+    async fn test_watch_pods_snapshot_includes_already_scheduled_pods_before_pending_ones() {
         let service = test_support::service();
         let mut scheduled = test_support::pod_detail("default", "already-scheduled");
         scheduled.node_name = "node-a".to_string();
-        service.store.upsert_pod(scheduled).await.unwrap();
+        service.store.upsert_pod(scheduled.clone()).await.unwrap();
+        let pending = test_support::pod_detail("default", "pending");
+        service.store.upsert_pod(pending.clone()).await.unwrap();
 
         let mut stream = service
             .watch_pods_impl(Request::new(WatchPodsRequest {}))
@@ -206,21 +205,19 @@ mod tests {
             .unwrap()
             .into_inner();
 
-        // The snapshot should have been skipped entirely: the first thing the
-        // stream produces is this later live event, not the scheduled pod.
-        let pending = test_support::pod_detail("default", "pending");
-        service.store.publish_pod_event(WatchPodEvent {
-            event_type: EventType::Added as i32,
-            pod: Some(pending.clone()),
-        });
-
-        let event = stream
+        let first = stream
             .next()
             .await
             .expect("stream ended")
             .expect("event should not be an error");
+        assert_eq!(first.pod, Some(scheduled));
 
-        assert_eq!(event.pod, Some(pending));
+        let second = stream
+            .next()
+            .await
+            .expect("stream ended")
+            .expect("event should not be an error");
+        assert_eq!(second.pod, Some(pending));
     }
 
     #[tokio::test]

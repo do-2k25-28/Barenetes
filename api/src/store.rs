@@ -661,7 +661,7 @@ impl Store {
                     Some(etcd_client::GetOptions::default().with_prefix()),
                 )
                 .await?;
-            let pending = resp
+            let mut pods: Vec<PodDetail> = resp
                 .kvs()
                 .iter()
                 .filter_map(|kv| {
@@ -672,19 +672,16 @@ impl Store {
                         })
                         .ok()
                 })
-                .filter(|pod| pod.node_name.is_empty())
                 .collect();
+            pods.sort_by_key(|pod| pod.node_name.is_empty());
             let receiver = self.pod_events.subscribe();
-            Ok((pending, receiver))
+            Ok((pods, receiver))
         } else {
-            let pods = self.pods.read().await;
-            let pending = pods
-                .values()
-                .filter(|pod| pod.node_name.is_empty())
-                .cloned()
-                .collect();
+            let stored = self.pods.read().await;
+            let mut pods: Vec<PodDetail> = stored.values().cloned().collect();
+            pods.sort_by_key(|pod| pod.node_name.is_empty());
             let receiver = self.pod_events.subscribe();
-            Ok((pending, receiver))
+            Ok((pods, receiver))
         }
     }
 
