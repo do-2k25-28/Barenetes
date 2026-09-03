@@ -5,7 +5,7 @@ Local network daemon called by the agent over gRPC to connect workloads to the n
 ## Features
 
 - Linux bridge, veth interfaces, and persistent IP address allocation.
-- VLAN isolation and multi-node VXLAN overlay.
+- VLAN isolation and multi-node IPv4 routing.
 - Firewall rules and TCP/UDP port forwarding.
 - gRPC API: `AddWorkloadNetwork`, `GetWorkloadNetwork`, and `DeleteWorkloadNetwork`.
 
@@ -29,12 +29,12 @@ Connect a workload with veth, IP, and VLAN:
 }
 ```
 
-Multi-node VXLAN overlay:
+Multi-node routing:
 
 ```bash
 BARENETES_NODE_ID=1 \
-BARENETES_NODE_IP=192.168.1.10 \
 BARENETES_REMOTE_NODE_IPS=192.168.1.11 \
+BARENETES_REMOTE_NODE_IDS=2 \
 ./target/release/cni
 ```
 
@@ -70,8 +70,8 @@ chemin du bridge avec `br_netfilter`. Il exécute quatre parcours :
 
 1. Un nœud avec un workload.
 2. Un nœud avec plusieurs workloads.
-3. Plusieurs nœuds avec un workload par nœud, reliés par VXLAN.
-4. Plusieurs nœuds avec plusieurs workloads par nœud, reliés par VXLAN.
+3. Plusieurs nœuds avec un workload par nœud, reliés par routage L3.
+4. Plusieurs nœuds avec plusieurs workloads par nœud, reliés par routage L3.
 
 Chaque parcours vérifie la connexion réseau, l'adressage IPv4 et le nettoyage
 des états. Les scénarios multi-nœuds lancent deux daemons CNI dans deux
