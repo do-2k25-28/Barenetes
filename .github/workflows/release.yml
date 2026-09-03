@@ -60,4 +60,5 @@ jobs:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: dist/*
           generate_release_notes: true
+          append_body: false
           fail_on_unmatched_files: true
