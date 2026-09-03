@@ -7,6 +7,7 @@ use std::os::unix::io::AsRawFd;
 use super::bridge;
 use super::system::{self, mtu, run, succeeds};
 
+use crate::addressing;
 use crate::state::{StateStore, WorkloadRecord, stable_id};
 use proto::cni::v1::{
     AddWorkloadNetworkRequest, DeleteWorkloadNetworkRequest, GetWorkloadNetworkRequest, NetworkRef,
@@ -79,7 +80,7 @@ pub(crate) fn add_workload_network(
     }
 
     let node = super::node_id()?;
-    let gateway = super::vlan::ensure(network.vlan_id as u8, node)?;
+    let gateway = addressing::gateway(network.vlan_id as u8, node);
     let gateway_string = gateway.to_string();
     let pool = pools.pool(network.vlan_id)?;
     let address = pool.allocate()?;
@@ -166,7 +167,9 @@ pub(crate) fn add_workload_network(
                 "untagged",
             ],
         )?;
-        run(IP, &["link", "set", "dev", &host_interface, "up"])
+        run(IP, &["link", "set", "dev", &host_interface, "up"])?;
+        super::vlan::ensure(network.vlan_id as u8, node)?;
+        Ok(())
     })();
 
     if let Err(error) = setup {

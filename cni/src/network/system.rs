@@ -40,14 +40,25 @@ pub(crate) fn succeeds(program: &str, arguments: &[&str]) -> io::Result<bool> {
 }
 
 pub(crate) fn run(program: &str, arguments: &[&str]) -> io::Result<()> {
-    if succeeds(program, arguments)? {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!(
-            "network command failed: {program} {}",
-            arguments.join(" ")
-        )))
+    let resolved = resolve(program)?;
+    let mut command = Command::new(resolved);
+    if program == "iptables" {
+        command.args(["-w", "5"]);
     }
+    command.args(arguments).stdin(Stdio::null());
+    let output = command.output()?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    Err(io::Error::other(if detail.is_empty() {
+        format!("network command failed: {program} {}", arguments.join(" "))
+    } else {
+        format!(
+            "network command failed: {program} {}: {detail}",
+            arguments.join(" ")
+        )
+    }))
 }
 
 pub(crate) fn output(program: &str, arguments: &[&str]) -> io::Result<String> {
