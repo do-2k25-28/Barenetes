@@ -88,16 +88,29 @@ async fn watch_nodes(
         } else {
             guard.scheduler.upsert_node(node);
         }
-        let retry: Vec<(PodKey, Pod)> = guard
+        drop(guard);
+
+        retry_pending(&mut client, &state).await?;
+    }
+
+    Ok(())
+}
+
+async fn retry_pending(
+    client: &mut ApiServerClient<Channel>,
+    state: &Arc<Mutex<SchedulerState>>,
+) -> Result<()> {
+    let retry: Vec<(PodKey, Pod)> = {
+        let guard = state.lock().await;
+        guard
             .pending
             .iter()
             .map(|(key, pod)| (key.clone(), pod.clone()))
-            .collect();
-        drop(guard);
+            .collect()
+    };
 
-        for ((namespace, name), pod) in retry {
-            try_schedule(&mut client, &state, &namespace, &name, &pod).await?;
-        }
+    for ((namespace, name), pod) in retry {
+        try_schedule(client, state, &namespace, &name, &pod).await?;
     }
 
     Ok(())
@@ -133,6 +146,9 @@ async fn watch_pods(
             let mut guard = state.lock().await;
             guard.pending.remove(&key);
             guard.scheduler.release_placement(&namespace, &pod.name);
+            drop(guard);
+
+            retry_pending(&mut client, &state).await?;
             continue;
         }
 
