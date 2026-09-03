@@ -233,17 +233,20 @@ install_control_plane() {
   if [[ -n "$ETCD_ENDPOINTS" ]]; then
     write_conf "${CONF_DIR}/api.env" <<-EOF
 			RUST_LOG=info
+			BARENETES_API_ADDR=0.0.0.0:50052
 			BARENETES_ETCD_ENDPOINTS=${ETCD_ENDPOINTS}
 			EOF
   elif [[ "$WITH_ETCD" == true ]]; then
     install_etcd
     write_conf "${CONF_DIR}/api.env" <<-EOF
 			RUST_LOG=info
+			BARENETES_API_ADDR=0.0.0.0:50052
 			BARENETES_ETCD_ENDPOINTS=http://127.0.0.1:2379
 			EOF
   else
     write_conf "${CONF_DIR}/api.env" <<-EOF
 			RUST_LOG=info
+			BARENETES_API_ADDR=0.0.0.0:50052
 			# In-memory store: state is lost on restart. Re-run with --with-etcd
 			# or --etcd-endpoints for persistence.
 			EOF

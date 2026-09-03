@@ -9,9 +9,10 @@ Type=simple
 ExecStart=/usr/local/bin/barenetes-api
 WorkingDirectory=/usr/local/bin
 
-# Written by deploy/install.sh. Holds RUST_LOG and, when --with-etcd or
-# --etcd-endpoints was used, BARENETES_ETCD_ENDPOINTS. Absent means the
-# in-memory store (fine for a single control-plane node / demo use).
+# Written by deploy/install.sh. Holds RUST_LOG, BARENETES_API_ADDR
+# (0.0.0.0:50052, so remote workers can reach it) and, when --with-etcd or
+# --etcd-endpoints was used, BARENETES_ETCD_ENDPOINTS. Absent endpoints
+# means the in-memory store (fine for a single control-plane node / demo use).
 EnvironmentFile=-/etc/barenetes/api.env
 
 TimeoutStopSec=30
