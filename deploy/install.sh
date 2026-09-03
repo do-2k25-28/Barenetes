@@ -379,6 +379,10 @@ setup_worker_pki() {
     echo "BARENETES_TLS_CERT=${tls_cert}"
     echo "BARENETES_TLS_KEY=${tls_key}"
     echo "BARENETES_TLS_CA=${tls_ca}"
+    # The api server's own cert is always issued CN=api (see
+    # ensure_control_plane_pki), so this is the identity the agent's
+    # desired-state client must verify api's certificate against.
+    echo "BARENETES_TLS_SERVER_NAME=api"
   } >> "${CONF_DIR}/agent.env"
 }
 
@@ -407,6 +411,7 @@ install_worker() {
   write_conf "${CONF_DIR}/agent.env" <<-EOF
 		RUST_LOG=info
 		BARENETES_SERVER=${SERVER}
+		BARENETES_NODE_NAME=${NODE_NAME}
 		EOF
   setup_worker_pki
 

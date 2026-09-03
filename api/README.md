@@ -21,6 +21,12 @@ Starts listening on `127.0.0.1:50052`. Override with `--addr` or `BARENETES_API_
 cargo run -p api -- --addr 127.0.0.1:60052
 ```
 
+Plaintext by default. Add `--tls-cert`/`--tls-key`/`--tls-ca` (or the
+`BARENETES_TLS_*` env vars) to require mTLS from clients instead; see
+[`deploy/README.md`](../deploy/README.md#mtls--cluster-pki) for how
+`deploy/install.sh` sets this up, and `barenetes-pki` (crate `pki`) for
+generating certs by hand.
+
 ## RPCs
 
 `delete_pod`, `watch_pods`, `watch_nodes`, `assign_pod`, and `watch_desired_state`

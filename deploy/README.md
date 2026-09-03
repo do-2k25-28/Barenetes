@@ -146,8 +146,8 @@ A worker's agent stays plaintext by default. To give it a certificate:
   point the installer at it:
 
   ```sh
-  sudo ./deploy/install.sh --role worker --node-name worker-1 \
-    --ca-dir /path/to/that/directory
+  sudo ./deploy/install.sh --role worker --server https://<control-plane-ip>:50052 \
+    --node-name worker-1 --ca-dir /path/to/that/directory
   ```
 
 Certificate rotation isn't automated; re-issuing and restarting the

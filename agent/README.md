@@ -10,16 +10,26 @@ cargo build -p agent
 
 ## Run
 
+`--server` (or `BARENETES_SERVER`) is required: it's where the agent
+registers itself and watches its desired state. This walkthrough only
+exercises the low-level Kubelet gRPC interface directly, so any reachable
+address works, even one with nothing listening: the agent retries that
+connection in the background and keeps serving Kubelet requests either way.
+
 ```sh
-sudo target/debug/agent
+sudo target/debug/agent --server http://127.0.0.1:50052
 # Kubelet service starting on 127.0.0.1:50053
 ```
 
 Override the bind address with `--addr` or `BARENETES_AGENT_ADDR`:
 
 ```sh
-sudo target/debug/agent --addr 127.0.0.1:60053
+sudo target/debug/agent --server http://127.0.0.1:50052 --addr 127.0.0.1:60053
 ```
+
+See [`deploy/README.md`](../deploy/README.md#mtls--cluster-pki) for
+`--tls-cert`/`--tls-key`/`--tls-ca` (mTLS for both the Kubelet server and the
+API server connection) when running against a real control plane.
 
 ## Start an nginx pod
 
