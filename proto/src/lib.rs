@@ -21,3 +21,5 @@ pub mod shared {
         tonic::include_proto!("shared.v1");
     }
 }
+
+pub mod tls;

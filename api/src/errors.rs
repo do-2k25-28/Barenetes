@@ -18,6 +18,12 @@ pub(crate) fn pod_already_exists(namespace: &str, name: &str) -> Status {
     Status::already_exists(format!("pod {namespace}/{name} already exists"))
 }
 
+pub(crate) fn identity_mismatch(peer: &str, node_name: &str) -> Status {
+    Status::permission_denied(format!(
+        "mTLS peer identity \"{peer}\" does not match claimed node name \"{node_name}\""
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use tonic::Code;
@@ -50,5 +56,11 @@ mod tests {
         let status = missing_node("node-1");
         assert_eq!(status.code(), Code::InvalidArgument);
         assert_eq!(status.message(), "missing node node-1");
+    }
+
+    #[test]
+    fn test_identity_mismatch() {
+        let status = identity_mismatch("node-a", "node-b");
+        assert_eq!(status.code(), Code::PermissionDenied);
     }
 }

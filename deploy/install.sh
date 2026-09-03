@@ -19,15 +19,26 @@
 #   --etcd-endpoints URL[,URL...]     Point the API server at an existing etcd instead
 #   --server URL                      API server address for the scheduler and agent
 #                                      (required for --role worker; default:
-#                                      http://127.0.0.1:50052 for control-plane/all)
+#                                      https://127.0.0.1:50052 for control-plane/all)
 #   --node-id N                       CNI BARENETES_NODE_ID, 0-255 (worker/all; default: 0)
 #   --node-ip IP                      CNI BARENETES_NODE_IP (worker/all, for multi-node VXLAN overlay)
 #   --remote-node-ips IP[,IP...]      CNI BARENETES_REMOTE_NODE_IPS (worker/all, for multi-node overlay)
+#   --node-name NAME                  This node's identity (worker/all; required). Becomes the CN of
+#                                      the agent's mTLS certificate.
+#   --ca-dir DIR                      Directory holding ca.pem plus a pre-issued <node-name>.pem/
+#                                      <node-name>-key.pem for this node (worker only; see
+#                                      deploy/README.md). Not needed for --role all, which issues the
+#                                      node's certificate itself from the CA it just generated.
 #   -h, --help                        Show this help and exit
 #
 # --role all installs both control-plane and worker components on the same
 # host (e.g. a single-node dev/demo box). The agent binds 127.0.0.1:50053 by
 # default specifically so it doesn't collide with the API server's :50052.
+#
+# The control plane always sets up a private cluster CA and runs the API
+# server and scheduler under mTLS; there's no plaintext opt-out. Worker
+# nodes stay plaintext unless --ca-dir wires up the agent's certificate (or
+# --role all, which needs no --ca-dir since it holds the CA locally).
 set -euo pipefail
 
 REPO="do-2k25-28/Barenetes"
@@ -36,15 +47,22 @@ LOCAL_DIST_DIR=""
 ROLE="control-plane"
 WITH_ETCD=false
 ETCD_ENDPOINTS=""
-SERVER="http://127.0.0.1:50052"
+SERVER="https://127.0.0.1:50052"
 SERVER_SET=false
 NODE_ID=""
 NODE_IP=""
+NODE_NAME=""
+CA_DIR=""
 REMOTE_NODE_IPS=""
 PREFIX="/usr/local/bin"
 CONF_DIR="/etc/barenetes"
 UNIT_DIR="/etc/systemd/system"
 ETCD_VERSION="v3.7.1"
+# Fixed (not overridable): the barenetes-api/-scheduler systemd units
+# hardcode these same paths in their LoadCredential= lines, so they can't
+# move independently of CONF_DIR.
+PKI_CA_DIR="${CONF_DIR}/pki/ca"
+PKI_ISSUED_DIR="${CONF_DIR}/pki/issued"
 
 INSTALLED_UNITS=()
 
@@ -78,15 +96,26 @@ Options:
   --etcd-endpoints URL[,URL...]     Point the API server at an existing etcd instead
   --server URL                      API server address for the scheduler and agent
                                      (required for --role worker; default:
-                                     http://127.0.0.1:50052 for control-plane/all)
+                                     https://127.0.0.1:50052 for control-plane/all)
   --node-id N                       CNI BARENETES_NODE_ID, 0-255 (worker/all; default: 0)
   --node-ip IP                      CNI BARENETES_NODE_IP (worker/all, for multi-node VXLAN overlay)
   --remote-node-ips IP[,IP...]      CNI BARENETES_REMOTE_NODE_IPS (worker/all, for multi-node overlay)
+  --node-name NAME                  This node's identity (worker/all; required). Becomes the CN of
+                                     the agent's mTLS certificate.
+  --ca-dir DIR                      Directory holding ca.pem plus a pre-issued <node-name>.pem/
+                                     <node-name>-key.pem for this node (worker only; see
+                                     deploy/README.md). Not needed for --role all, which issues the
+                                     node's certificate itself from the CA it just generated.
   -h, --help                        Show this help and exit
 
 --role all installs both control-plane and worker components on the same
 host (e.g. a single-node dev/demo box). The agent binds 127.0.0.1:50053 by
 default specifically so it doesn't collide with the API server's :50052.
+
+The control plane always sets up a private cluster CA and runs the API
+server and scheduler under mTLS; there's no plaintext opt-out. Worker
+nodes stay plaintext unless --ca-dir wires up the agent's certificate (or
+--role all, which needs no --ca-dir since it holds the CA locally).
 EOF
 }
 
@@ -103,6 +132,8 @@ parse_args() {
       --node-id) NODE_ID="$2"; shift 2 ;;
       --node-ip) NODE_IP="$2"; shift 2 ;;
       --remote-node-ips) REMOTE_NODE_IPS="$2"; shift 2 ;;
+      --node-name) NODE_NAME="$2"; shift 2 ;;
+      --ca-dir) CA_DIR="$2"; shift 2 ;;
       -h|--help) usage; exit 0 ;;
       *) die "unknown option: $1 (see --help)" ;;
     esac
@@ -227,8 +258,29 @@ write_conf() {
   cat > "$path"
 }
 
+# Generates the cluster CA on first run (idempotent: `barenetes-pki init-ca`
+# itself refuses to overwrite an existing ca.pem) and issues the api/
+# scheduler leaf certs the control plane's own two services use.
+ensure_control_plane_pki() {
+  install_binary pki
+  install -d -m 0755 "$PKI_ISSUED_DIR"
+
+  if [[ ! -f "${PKI_CA_DIR}/ca.pem" ]]; then
+    log "Generating cluster CA at ${PKI_CA_DIR}..."
+    "${PREFIX}/barenetes-pki" init-ca --out-dir "$PKI_CA_DIR"
+  fi
+  if [[ ! -f "${PKI_ISSUED_DIR}/api.pem" ]]; then
+    "${PREFIX}/barenetes-pki" issue --ca-dir "$PKI_CA_DIR" --cn api --out-dir "$PKI_ISSUED_DIR"
+  fi
+  if [[ ! -f "${PKI_ISSUED_DIR}/scheduler.pem" ]]; then
+    "${PREFIX}/barenetes-pki" issue --ca-dir "$PKI_CA_DIR" --cn scheduler --out-dir "$PKI_ISSUED_DIR"
+  fi
+}
+
 install_control_plane() {
   log "Installing control-plane components: api, scheduler"
+
+  ensure_control_plane_pki
 
   if [[ -n "$ETCD_ENDPOINTS" ]]; then
     write_conf "${CONF_DIR}/api.env" <<-EOF
@@ -252,13 +304,23 @@ install_control_plane() {
 			EOF
   fi
 
+  # barenetes-api.service itself passes --tls-cert/--tls-key/--tls-ca (via
+  # LoadCredential=) on ExecStart=, not through this env file: DynamicUser
+  # can't read the 0600 key file directly, and a real path set here would
+  # silently beat that unit's own override (EnvironmentFile= always wins
+  # over Environment=, regardless of order) if it were duplicated here too.
+
   install_binary api
   fetch_unit_file barenetes-api.service "${UNIT_DIR}/barenetes-api.service"
   INSTALLED_UNITS+=("barenetes-api.service")
 
+  # Same reasoning as api.env above: barenetes-scheduler.service passes
+  # --tls-cert/--tls-key/--tls-ca itself. BARENETES_TLS_SERVER_NAME has no
+  # such conflict (it's not a credential file), so it's set here as usual.
   write_conf "${CONF_DIR}/scheduler.env" <<-EOF
 		RUST_LOG=info
 		BARENETES_SERVER=${SERVER}
+		BARENETES_TLS_SERVER_NAME=api
 		EOF
 
   install_binary scheduler
@@ -270,8 +332,60 @@ install_control_plane() {
   enable_and_restart barenetes-scheduler.service
 }
 
+# Wires up the agent's mTLS certificate, if one is available, and appends
+# the resulting BARENETES_TLS_* vars to agent.env. Two cases:
+#   - --role all: the CA (with its private key) was just generated locally
+#     by install_control_plane(), so the node's cert can be issued here
+#     directly.
+#   - --role worker (a separate host): the CA private key must never leave
+#     the control plane, so --ca-dir instead points at a directory the
+#     operator populated by hand with ca.pem plus a cert already issued on
+#     the control plane for this node_name.
+# Neither case applies (plaintext worker) leaves agent.env unchanged, with
+# a warning.
+setup_worker_pki() {
+  local tls_cert tls_key tls_ca
+
+  if [[ -n "$CA_DIR" ]]; then
+    [[ -f "${CA_DIR}/ca.pem" ]] || die "--ca-dir ${CA_DIR} is missing ca.pem"
+    [[ -f "${CA_DIR}/${NODE_NAME}.pem" && -f "${CA_DIR}/${NODE_NAME}-key.pem" ]] \
+      || die "--ca-dir ${CA_DIR} is missing ${NODE_NAME}.pem/${NODE_NAME}-key.pem for this node. Issue them on the control plane first with: barenetes-pki issue --ca-dir <path-to-ca> --cn ${NODE_NAME} --out-dir <dir>, then copy them here next to ca.pem (never copy ca-key.pem to a worker)."
+    # Copied into /etc/barenetes/pki rather than read from --ca-dir in
+    # place: that directory is operator-chosen and typically lands under
+    # $HOME, which barenetes-agent.service's ProtectHome=true hides from
+    # the running service.
+    install -d -m 0755 "$PKI_ISSUED_DIR" "$PKI_CA_DIR"
+    install -m 0644 "${CA_DIR}/${NODE_NAME}.pem" "${PKI_ISSUED_DIR}/${NODE_NAME}.pem"
+    install -m 0600 "${CA_DIR}/${NODE_NAME}-key.pem" "${PKI_ISSUED_DIR}/${NODE_NAME}-key.pem"
+    install -m 0644 "${CA_DIR}/ca.pem" "${PKI_CA_DIR}/ca.pem"
+    tls_cert="${PKI_ISSUED_DIR}/${NODE_NAME}.pem"
+    tls_key="${PKI_ISSUED_DIR}/${NODE_NAME}-key.pem"
+    tls_ca="${PKI_CA_DIR}/ca.pem"
+  elif [[ -f "${PKI_CA_DIR}/ca-key.pem" ]]; then
+    install_binary pki
+    install -d -m 0755 "$PKI_ISSUED_DIR"
+    if [[ ! -f "${PKI_ISSUED_DIR}/${NODE_NAME}.pem" ]]; then
+      "${PREFIX}/barenetes-pki" issue --ca-dir "$PKI_CA_DIR" --cn "$NODE_NAME" --out-dir "$PKI_ISSUED_DIR"
+    fi
+    tls_cert="${PKI_ISSUED_DIR}/${NODE_NAME}.pem"
+    tls_key="${PKI_ISSUED_DIR}/${NODE_NAME}-key.pem"
+    tls_ca="${PKI_CA_DIR}/ca.pem"
+  else
+    log "No --ca-dir given: barenetes-agent will start WITHOUT TLS (unauthenticated, unencrypted). See deploy/README.md to enable mTLS."
+    return
+  fi
+
+  {
+    echo "BARENETES_TLS_CERT=${tls_cert}"
+    echo "BARENETES_TLS_KEY=${tls_key}"
+    echo "BARENETES_TLS_CA=${tls_ca}"
+  } >> "${CONF_DIR}/agent.env"
+}
+
 install_worker() {
   log "Installing worker components: cni, agent"
+
+  [[ -n "$NODE_NAME" ]] || die "--node-name is required for --role worker/all"
 
   systemctl is-active --quiet containerd \
     || die "containerd is required on worker nodes but isn't running. Install/start it first (see deploy/README.md), then re-run with --role worker."
@@ -294,6 +408,7 @@ install_worker() {
 		RUST_LOG=info
 		BARENETES_SERVER=${SERVER}
 		EOF
+  setup_worker_pki
 
   install_binary agent
   fetch_unit_file barenetes-agent.service "${UNIT_DIR}/barenetes-agent.service"

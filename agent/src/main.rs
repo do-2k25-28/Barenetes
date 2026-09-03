@@ -1,6 +1,7 @@
 use anyhow::Context;
 use clap::Parser;
 use proto::agent::v1::kubelet_server::KubeletServer;
+use proto::tls::{TlsArgs, TlsMode, load_server_tls_config, tls_mode};
 use tonic::transport::Server;
 
 mod cni;
@@ -30,6 +31,12 @@ struct Cli {
     /// Address to bind the kubelet service on
     #[arg(long, env = "BARENETES_AGENT_ADDR", default_value = "127.0.0.1:50053")]
     addr: String,
+
+    // Shared by both roles this binary plays: the Kubelet gRPC server
+    // (mTLS server config) and the desired-state watch client of `api`
+    // (mTLS client config, see desired_state::run).
+    #[command(flatten)]
+    tls: TlsArgs,
 }
 
 #[tokio::main]
@@ -44,8 +51,22 @@ async fn main() -> anyhow::Result<()> {
 
     println!("Kubelet service starting on {addr}");
 
+    let server_tls = cli.tls.clone();
     let server_task = tokio::spawn(async move {
-        Server::builder()
+        let mut server = Server::builder();
+        match tls_mode(&server_tls)? {
+            TlsMode::Mtls { cert, key, ca } => {
+                server = server.tls_config(load_server_tls_config(&cert, &key, &ca)?)?;
+                println!("mTLS enabled: client certificates are required");
+            }
+            TlsMode::Plaintext => {
+                println!(
+                    "starting kubelet service WITHOUT TLS: connections are unauthenticated and unencrypted (set --tls-cert/--tls-key/--tls-ca to enable mTLS)"
+                );
+            }
+        }
+
+        server
             .add_service(KubeletServer::new(kubelet))
             .serve(addr)
             .await
@@ -57,7 +78,8 @@ async fn main() -> anyhow::Result<()> {
         "Connecting to API server at {} as node {node_name}",
         cli.server
     );
-    let desired_state_task = tokio::spawn(desired_state::run(cli.server, node_name, cli.addr));
+    let desired_state_task =
+        tokio::spawn(desired_state::run(cli.server, node_name, cli.addr, cli.tls));
 
     // Both tasks are meant to run for the process' whole lifetime, so the
     // first one to finish did so because something broke. `try_join!` would

@@ -1,21 +1,12 @@
-mod errors;
-mod handlers;
-mod service;
-mod store;
-mod telemetry;
-#[cfg(test)]
-mod test_support;
-mod validation;
-
 use std::sync::Arc;
 use std::time::Duration;
 
+use api::service::ApiService;
+use api::store::Store;
 use clap::Parser;
 use proto::api::v1::api_server_server::ApiServerServer;
+use proto::tls::{TlsArgs, TlsMode, load_server_tls_config, tls_mode};
 use tonic::transport::Server;
-
-use service::ApiService;
-use store::Store;
 
 #[derive(Parser)]
 #[command(name = "api", version, about = "Barenetes API server")]
@@ -23,6 +14,9 @@ struct Cli {
     /// Address to bind the API server on
     #[arg(long, env = "BARENETES_API_ADDR", default_value = "127.0.0.1:50052")]
     addr: String,
+
+    #[command(flatten)]
+    tls: TlsArgs,
 }
 
 #[tokio::main]
@@ -58,9 +52,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!(%addr, "API server starting");
 
-    Server::builder()
+    let mut server = Server::builder()
         .http2_keepalive_interval(Some(Duration::from_secs(10)))
-        .http2_keepalive_timeout(Some(Duration::from_secs(20)))
+        .http2_keepalive_timeout(Some(Duration::from_secs(20)));
+
+    match tls_mode(&cli.tls)? {
+        TlsMode::Mtls { cert, key, ca } => {
+            server = server.tls_config(load_server_tls_config(&cert, &key, &ca)?)?;
+            tracing::info!("mTLS enabled: client certificates are required");
+        }
+        TlsMode::Plaintext => {
+            tracing::warn!(
+                "starting API server WITHOUT TLS: connections are unauthenticated and unencrypted (set --tls-cert/--tls-key/--tls-ca to enable mTLS)"
+            );
+        }
+    }
+
+    server
         .add_service(ApiServerServer::new(api_service))
         .serve_with_shutdown(addr, shutdown_signal())
         .await?;

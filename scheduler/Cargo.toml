@@ -12,6 +12,6 @@ prost = "0.14.4"
 proto = { path = "../proto" }
 tokio = { version = "1.52.3", features = ["full"] }
 tokio-stream = "0.1.18"
-tonic = "0.14.6"
+tonic = { version = "0.14.6", features = ["tls-ring"] }
 tonic-prost = "0.14.6"
 

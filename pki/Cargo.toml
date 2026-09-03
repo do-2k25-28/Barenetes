@@ -1,0 +1,20 @@
+[package]
+name = "pki"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pki"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4.6.6", features = ["derive", "env"] }
+rcgen = { version = "0.14", features = ["pem", "x509-parser"] }
+time = "0.3.55"
+
+[dev-dependencies]
+pem = "4"
+x509-parser = "0.18"

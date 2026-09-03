@@ -6,10 +6,15 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+anyhow = "1"
+clap = { version = "4.6.6", features = ["derive", "env"] }
 prost = "0.14.4"
 serde = { version = "1.0.228", features = ["derive"] }
-tonic = "0.14.6"
+tonic = { version = "0.14.6", features = ["tls-ring"] }
 tonic-prost = "0.14.6"
+
+[dev-dependencies]
+rcgen = "0.14"
 
 [build-dependencies]
 protoc-bin-vendored = "3.2.0"

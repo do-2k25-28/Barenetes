@@ -13,14 +13,14 @@ async fn main() {
 
     let result = match cli.command {
         Commands::Create(args) => match args.resource {
-            CreateResource::Pod(args) => commands::create_pod(&cli.server, args).await,
+            CreateResource::Pod(args) => commands::create_pod(&cli.server, &cli.tls, args).await,
         },
         Commands::Get(args) => match args.resource {
-            GetResource::Pod(args) => commands::get_pod(&cli.server, args).await,
-            GetResource::Node(args) => commands::get_node(&cli.server, args).await,
+            GetResource::Pod(args) => commands::get_pod(&cli.server, &cli.tls, args).await,
+            GetResource::Node(args) => commands::get_node(&cli.server, &cli.tls, args).await,
         },
         Commands::Delete(args) => match args.resource {
-            DeleteResource::Pod(args) => commands::delete_pod(&cli.server, args).await,
+            DeleteResource::Pod(args) => commands::delete_pod(&cli.server, &cli.tls, args).await,
         },
     };
 

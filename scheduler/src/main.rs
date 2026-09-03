@@ -7,6 +7,7 @@ use clap::Parser;
 use proto::api::v1::api_server_client::ApiServerClient;
 use proto::api::v1::{AssignPodRequest, WatchNodesRequest, WatchPodsRequest, assign_pod_request};
 use proto::shared::v1::{EventType, Pod};
+use proto::tls::{TlsArgs, TlsMode, load_client_tls_config, tls_mode};
 use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
 use tonic::transport::Channel;
@@ -20,9 +21,32 @@ use schedulers::BasicScheduler;
 #[derive(Parser)]
 #[command(name = "scheduler", version, about = "Barenetes scheduler")]
 struct Cli {
-    /// Address of the API server (e.g. http://127.0.0.1:50052)
+    /// Address of the API server (e.g. http://127.0.0.1:50052, or
+    /// https://127.0.0.1:50052 when using --tls-*)
     #[arg(long, env = "BARENETES_SERVER")]
     server: String,
+
+    #[command(flatten)]
+    tls: TlsArgs,
+}
+
+/// Connects to the API server, plaintext or mTLS depending on `tls`. In mTLS mode
+/// `--tls-server-name` must be set, since the certs `barenetes-pki` issues carry no
+/// public DNS name for `tonic` to default the expected server identity to.
+async fn connect(server: String, tls: &TlsArgs) -> Result<ApiServerClient<Channel>> {
+    match tls_mode(tls)? {
+        TlsMode::Plaintext => Ok(ApiServerClient::connect(server).await?),
+        TlsMode::Mtls { cert, key, ca } => {
+            let server_name = tls.tls_server_name.as_deref().context(
+                "--tls-server-name is required when connecting over mTLS (--tls-cert/--tls-key/--tls-ca set)",
+            )?;
+            let channel = Channel::from_shared(server)?
+                .tls_config(load_client_tls_config(&cert, &key, &ca, server_name)?)?
+                .connect()
+                .await?;
+            Ok(ApiServerClient::new(channel))
+        }
+    }
 }
 
 /// (namespace, name)
@@ -43,7 +67,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     println!("Connecting to API server at {}", cli.server);
-    let client = ApiServerClient::connect(cli.server).await?;
+    let client = connect(cli.server.clone(), &cli.tls).await?;
 
     let state = Arc::new(Mutex::new(SchedulerState::default()));
 

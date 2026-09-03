@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 use proto::shared::v1::{EnvVar, Port, Protocol};
+use proto::tls::TlsArgs;
 
 #[derive(Parser)]
 #[command(name = "barectl", version, about = "Command-line client for Barenetes")]
@@ -9,6 +10,9 @@ pub struct Cli {
     /// Address of the API server
     #[arg(env = "BARENETES_SERVER", default_value = "http://127.0.0.1:50052")]
     pub server: String,
+
+    #[command(flatten)]
+    pub tls: TlsArgs,
 
     #[command(subcommand)]
     pub command: Commands,

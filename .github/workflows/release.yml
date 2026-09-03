@@ -64,7 +64,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          for bin in agent api barectl cni scheduler; do
+          for bin in agent api barectl cni pki scheduler; do
             install -m 0755 "target/release/$bin" "dist/barenetes-$bin-linux-x86_64"
           done
 
