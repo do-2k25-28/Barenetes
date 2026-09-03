@@ -38,7 +38,6 @@ pub(crate) fn add_workload_network(
 ) -> io::Result<WorkloadNetwork> {
     let (workload, network, pid, interface) = validate_add_request(&request)?;
     let netns = open_netns(&request.netns_path)?;
-    super::firewall::validate_mappings(&request.port_mappings)?;
     if let Some(record) = state.load(
         &workload.workload_name,
         &workload.instance_name,
@@ -63,6 +62,9 @@ pub(crate) fn add_workload_network(
                 &network.network_name,
             )?;
         } else {
+            let node = super::node_id()?;
+            let gateway = super::vlan::ensure(network.vlan_id as u8, node)?;
+            migrate_existing_workload(&netns, &record, gateway)?;
             super::firewall::add_mappings(&record.ip_address, &record.port_mappings)?;
             return Ok(record_to_network(&record));
         }
@@ -196,6 +198,48 @@ pub(crate) fn add_workload_network(
         return Err(error);
     }
     Ok(record_to_network(&record))
+}
+
+fn migrate_existing_workload(
+    netns: &File,
+    record: &WorkloadRecord,
+    gateway: std::net::Ipv4Addr,
+) -> io::Result<()> {
+    let legacy_address = format!("{}/16", record.ip_address);
+    let _ = run_in_namespace(
+        netns,
+        &[
+            "address",
+            "del",
+            &legacy_address,
+            "dev",
+            &record.interface_name,
+        ],
+    );
+    let address = format!("{}/24", record.ip_address);
+    run_in_namespace(
+        netns,
+        &[
+            "address",
+            "replace",
+            &address,
+            "dev",
+            &record.interface_name,
+        ],
+    )?;
+    let gateway = gateway.to_string();
+    run_in_namespace(
+        netns,
+        &[
+            "route",
+            "replace",
+            "default",
+            "via",
+            &gateway,
+            "dev",
+            &record.interface_name,
+        ],
+    )
 }
 
 pub(crate) fn get_workload_network(

@@ -11,6 +11,7 @@ use tonic::transport::Server;
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let pools = ip_pool_directory()?;
+    network::validate_configuration(network::node_id()?)?;
     network::ensure_bridge()?;
     network::ensure_egress()?;
     let state_path = configured_path(

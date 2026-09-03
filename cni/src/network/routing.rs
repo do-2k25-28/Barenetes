@@ -15,6 +15,18 @@ pub(crate) fn node_id() -> io::Result<u8> {
     })
 }
 
+pub(crate) fn validate_configuration(local_node: u8) -> io::Result<()> {
+    for (remote_node, _) in remote_nodes()? {
+        if remote_node == local_node {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "remote node id must differ from the local node id",
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn ensure_routes(vlan: u8, local_node: u8) -> io::Result<()> {
     for (remote_node, remote_ip) in remote_nodes()? {
         if remote_node == local_node {
@@ -31,53 +43,39 @@ pub(crate) fn ensure_routes(vlan: u8, local_node: u8) -> io::Result<()> {
 }
 
 fn remote_nodes() -> io::Result<Vec<(u8, Ipv4Addr)>> {
-    let ips = std::env::var("BARENETES_REMOTE_NODE_IPS")
+    let nodes = std::env::var("BARENETES_REMOTE_NODES")
         .ok()
         .filter(|value| !value.is_empty())
         .map(|value| {
             value
                 .split(',')
                 .map(|item| {
-                    item.parse().map_err(|_| {
+                    let (id, ip) = item.split_once('@').ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "remote node must be ID@IPv4")
+                    })?;
+                    let id = id.parse::<u8>().map_err(|_| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "invalid remote node id")
+                    })?;
+                    let ip = ip.parse::<Ipv4Addr>().map_err(|_| {
                         io::Error::new(io::ErrorKind::InvalidInput, "invalid remote node IPv4")
-                    })
+                    })?;
+                    if id == 0 {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "remote node id must be between 1 and 255",
+                        ));
+                    }
+                    Ok((id, ip))
                 })
-                .collect::<io::Result<Vec<Ipv4Addr>>>()
+                .collect::<io::Result<Vec<(u8, Ipv4Addr)>>>()
         })
         .transpose()?
         .unwrap_or_default();
-    if ips.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let ids = std::env::var("BARENETES_REMOTE_NODE_IDS")
-        .ok()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "BARENETES_REMOTE_NODE_IDS is required with remote nodes",
-            )
-        })?
-        .split(',')
-        .map(|item| {
-            item.parse::<u8>().map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidInput, "invalid remote node id")
-            })
-        })
-        .collect::<io::Result<Vec<u8>>>()?;
-
-    if ids.len() != ips.len() || ids.contains(&0) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "remote node ids and IPs must have the same length and ids must be between 1 and 255",
-        ));
-    }
-    if ids.windows(2).any(|pair| pair[0] == pair[1]) {
+    if nodes.windows(2).any(|pair| pair[0].0 == pair[1].0) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "remote node ids must be unique",
         ));
     }
-    Ok(ids.into_iter().zip(ips).collect())
+    Ok(nodes)
 }

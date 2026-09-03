@@ -93,8 +93,7 @@ start_node() {
 
     nsenter -t "$pid" -n env \
         BARENETES_NODE_ID="$node_id" \
-        BARENETES_REMOTE_NODE_IPS="$remote_ip" \
-        BARENETES_REMOTE_NODE_IDS="$([[ "$node_id" == 1 ]] && echo 2 || echo 1)" \
+        BARENETES_REMOTE_NODES="$([[ "$node_id" == 1 ]] && echo "2@$remote_ip" || echo "1@$remote_ip")" \
         BARENETES_CNI_SOCKET="$socket" \
         BARENETES_CNI_STATE_DIR="$state" \
         BARENETES_CNI_IP_POOL_DIR="$TMP_DIR/pool-node-${node_id}" \
@@ -130,8 +129,7 @@ restart_node_daemon() {
 
     nsenter -t "$pid" -n env \
         BARENETES_NODE_ID="$node_id" \
-        BARENETES_REMOTE_NODE_IPS="$remote_ip" \
-        BARENETES_REMOTE_NODE_IDS="$([[ "$node_id" == 1 ]] && echo 2 || echo 1)" \
+        BARENETES_REMOTE_NODES="$([[ "$node_id" == 1 ]] && echo "2@$remote_ip" || echo "1@$remote_ip")" \
         BARENETES_CNI_SOCKET="$socket" \
         BARENETES_CNI_STATE_DIR="$state" \
         BARENETES_CNI_IP_POOL_DIR="$TMP_DIR/pool-node-${node_id}" \

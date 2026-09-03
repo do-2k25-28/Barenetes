@@ -21,8 +21,7 @@
 #                                      (required for --role worker; default:
 #                                      http://127.0.0.1:50052 for control-plane/all)
 #   --node-id N                       CNI BARENETES_NODE_ID, 0-255 (worker/all; default: 0)
-#   --remote-node-ips IP[,IP...]      underlay IPs of remote worker nodes
-#   --remote-node-ids ID[,ID...]      node IDs matching --remote-node-ips
+#   --remote-nodes ID@IP[,ID@IP...]  remote node IDs and underlay IPs
 #   -h, --help                        Show this help and exit
 #
 # --role all installs both control-plane and worker components on the same
@@ -39,8 +38,7 @@ ETCD_ENDPOINTS=""
 SERVER="http://127.0.0.1:50052"
 SERVER_SET=false
 NODE_ID=""
-REMOTE_NODE_IPS=""
-REMOTE_NODE_IDS=""
+REMOTE_NODES=""
 PREFIX="/usr/local/bin"
 CONF_DIR="/etc/barenetes"
 UNIT_DIR="/etc/systemd/system"
@@ -80,8 +78,7 @@ Options:
                                      (required for --role worker; default:
                                      http://127.0.0.1:50052 for control-plane/all)
   --node-id N                       CNI BARENETES_NODE_ID, 0-255 (worker/all; default: 0)
-  --remote-node-ips IP[,IP...]      underlay IPs of remote worker nodes
-  --remote-node-ids ID[,ID...]      node IDs matching --remote-node-ips
+  --remote-nodes ID@IP[,ID@IP...]  remote node IDs and underlay IPs
   -h, --help                        Show this help and exit
 
 --role all installs both control-plane and worker components on the same
@@ -101,8 +98,7 @@ parse_args() {
       --etcd-endpoints) ETCD_ENDPOINTS="$2"; shift 2 ;;
       --server) SERVER="$2"; SERVER_SET=true; shift 2 ;;
       --node-id) NODE_ID="$2"; shift 2 ;;
-      --remote-node-ips) REMOTE_NODE_IPS="$2"; shift 2 ;;
-      --remote-node-ids) REMOTE_NODE_IDS="$2"; shift 2 ;;
+      --remote-nodes) REMOTE_NODES="$2"; shift 2 ;;
       -h|--help) usage; exit 0 ;;
       *) die "unknown option: $1 (see --help)" ;;
     esac
@@ -282,8 +278,7 @@ install_worker() {
   {
     echo "RUST_LOG=info"
     [[ -n "$NODE_ID" ]] && echo "BARENETES_NODE_ID=${NODE_ID}"
-    [[ -n "$REMOTE_NODE_IPS" ]] && echo "BARENETES_REMOTE_NODE_IPS=${REMOTE_NODE_IPS}"
-    [[ -n "$REMOTE_NODE_IDS" ]] && echo "BARENETES_REMOTE_NODE_IDS=${REMOTE_NODE_IDS}"
+    [[ -n "$REMOTE_NODES" ]] && echo "BARENETES_REMOTE_NODES=${REMOTE_NODES}"
   } > "${CONF_DIR}/cni.env"
 
   install_binary cni

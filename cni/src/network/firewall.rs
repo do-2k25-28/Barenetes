@@ -2,7 +2,8 @@ use proto::shared::v1::{Port, Protocol};
 use std::collections::BTreeSet;
 use std::io;
 
-use crate::network::{BRIDGE_NAME, run, succeeds};
+use super::bridge::BRIDGE_NAME;
+use super::system::{run, succeeds};
 
 const IPTABLES: &str = "iptables";
 const SYSCTL: &str = "sysctl";

@@ -40,16 +40,14 @@ minimal Debian image).
 ```sh
 sudo ./deploy/install.sh --role worker --server http://192.168.1.10:50052 \
   --node-id 1 \
-  --remote-node-ips 192.168.1.12,192.168.1.13 \
-  --remote-node-ids 2,3
+  --remote-nodes 2@192.168.1.12,3@192.168.1.13
 ```
 
 Installs and starts `barenetes-cni` and `barenetes-agent`. `--server` is
 **required** here: the agent has no default for where the API server is, and
 a worker is by definition not the control-plane host. `--node-id`,
-`--remote-node-ips` and `--remote-node-ids` are only needed for multi-node
-routing; omit them for a single-node setup. The IDs and IPs must be paired in
-the same order.
+`--remote-nodes` is only needed for multi-node routing; omit it for a
+single-node setup. Each entry is `node-id@underlay-ip`.
 
 ### Installing containerd
 

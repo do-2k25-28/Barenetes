@@ -14,8 +14,8 @@ WorkingDirectory=/usr/local/bin
 
 # Written by deploy/install.sh. BARENETES_NODE_ID defaults to 0 for
 # single-node setups. Multi-node routing requires a unique node id and
-# matching BARENETES_REMOTE_NODE_IPS/BARENETES_REMOTE_NODE_IDS values -- see
-# deploy/install.sh --node-id/--remote-node-ips/--remote-node-ids.
+# BARENETES_REMOTE_NODES values -- see deploy/install.sh
+# --node-id/--remote-nodes.
 EnvironmentFile=-/etc/barenetes/cni.env
 
 # cni::run() installs a SIGINT handler to remove the unix socket on

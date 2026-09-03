@@ -48,6 +48,8 @@ pub(crate) fn ensure(vlan: u8, node: u8) -> io::Result<Ipv4Addr> {
         )?;
     }
     let gateway = addressing::gateway(vlan, node);
+    let legacy_gateway = format!("{gateway}/16");
+    let _ = run(IP, &["address", "del", &legacy_gateway, "dev", &name]);
     run(
         IP,
         &["address", "replace", &format!("{gateway}/24"), "dev", &name],

@@ -33,8 +33,7 @@ Multi-node routing:
 
 ```bash
 BARENETES_NODE_ID=1 \
-BARENETES_REMOTE_NODE_IPS=192.168.1.11 \
-BARENETES_REMOTE_NODE_IDS=2 \
+BARENETES_REMOTE_NODES=2@192.168.1.11 \
 ./target/release/cni
 ```
 
