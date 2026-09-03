@@ -38,11 +38,14 @@ how to install containerd; `iptables` is a standard package
 minimal Debian image).
 
 ```sh
-sudo ./deploy/install.sh --role worker --node-id 1 --node-ip 192.168.1.11 \
+sudo ./deploy/install.sh --role worker --server http://192.168.1.10:50052 \
+  --node-id 1 --node-ip 192.168.1.11 \
   --remote-node-ips 192.168.1.10,192.168.1.12
 ```
 
-Installs and starts `barenetes-cni` and `barenetes-agent`. `--node-id`,
+Installs and starts `barenetes-cni` and `barenetes-agent`. `--server` is
+**required** here: the agent has no default for where the API server is, and
+a worker is by definition not the control-plane host. `--node-id`,
 `--node-ip`, and `--remote-node-ips` are only needed for the multi-node
 VXLAN overlay; omit them for a single-node setup.
 
@@ -91,12 +94,10 @@ Run `./deploy/install.sh --help` for the full flag reference (`--version`,
 
 - Doesn't manage TLS/auth in front of the API server — everything here is
   plaintext gRPC on loopback/LAN, matching the project's current state.
-- Doesn't wire the agent up to the API server's `WatchDesiredState` stream —
-  that integration doesn't exist yet in `agent/src`, so pods created via
-  `barectl`/the API and scheduled by the scheduler don't yet reach a
-  worker's agent automatically. Until that's implemented, drive the agent
-  directly with `cargo run -p agent --example kubelet_cli` or `grpcurl`
-  against `127.0.0.1:50053` (see `agent/README.md`).
+- Doesn't reconcile against containers already running on a worker — the
+  agent applies `RUN`/`STOP` events as they arrive, but the opening snapshot
+  isn't diffed against local state, so a container left behind by a previous
+  agent process isn't cleaned up.
 - Doesn't configure firewalling/NAT beyond what `barenetes-cni` itself sets
   up for pod networking.
 

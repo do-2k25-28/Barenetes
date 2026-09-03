@@ -11,11 +11,14 @@ User=root
 ExecStart=/usr/local/bin/barenetes-agent
 WorkingDirectory=/usr/local/bin
 
-# Written by deploy/install.sh. Holds RUST_LOG and, if the default clashes
-# with something else on this host, BARENETES_AGENT_ADDR (defaults to
-# 127.0.0.1:50053, distinct from the API server's 127.0.0.1:50052 so both
-# can run on the same host in an all-in-one deployment).
-EnvironmentFile=-/etc/barenetes/agent.env
+# Written by deploy/install.sh. Must set BARENETES_SERVER (the agent has no
+# default: it needs to be told where the API server is). Also holds RUST_LOG
+# and, if the default clashes with something else on this host,
+# BARENETES_AGENT_ADDR (defaults to 127.0.0.1:50053, distinct from the API
+# server's 127.0.0.1:50052 so both can run on the same host in an all-in-one
+# deployment). Not optional (no leading '-'): without it the agent can't
+# parse its arguments, so failing to start here beats a crash loop.
+EnvironmentFile=/etc/barenetes/agent.env
 
 Restart=on-failure
 RestartSec=2

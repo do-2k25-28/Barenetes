@@ -1,3 +1,4 @@
+use anyhow::Context;
 use clap::Parser;
 use proto::agent::v1::kubelet_server::KubeletServer;
 use tonic::transport::Server;
@@ -58,9 +59,13 @@ async fn main() -> anyhow::Result<()> {
     );
     let desired_state_task = tokio::spawn(desired_state::run(cli.server, node_name, cli.addr));
 
-    let (server_result, desired_state_result) = tokio::try_join!(server_task, desired_state_task)?;
-    server_result?;
-    desired_state_result?;
-
-    Ok(())
+    // Both tasks are meant to run for the process' whole lifetime, so the
+    // first one to finish did so because something broke. `try_join!` would
+    // wait for *both*, which means a fatal desired-state error (a malformed
+    // API server address, say) would sit unreported behind the kubelet server
+    // running forever. Select instead, and let systemd restart us.
+    tokio::select! {
+        result = server_task => result.context("kubelet server task panicked")?,
+        result = desired_state_task => result.context("desired-state task panicked")?,
+    }
 }

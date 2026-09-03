@@ -35,11 +35,9 @@ pub async fn run(server_addr: String, node_name: String, kubelet_addr: String) -
 
     let mut api = ApiServerClient::new(api_channel);
     let mut kubelet = KubeletClient::new(kubelet_channel);
-    let capacity = detect_capacity().context("failed to detect node capacity")?;
 
     loop {
-        if let Err(error) = register_and_watch(&mut api, &mut kubelet, &node_name, &capacity).await
-        {
+        if let Err(error) = register_and_watch(&mut api, &mut kubelet, &node_name).await {
             eprintln!("agent: desired-state watch failed, retrying in {RETRY_DELAY:?}: {error:#}");
         }
         tokio::time::sleep(RETRY_DELAY).await;
@@ -50,16 +48,21 @@ async fn register_and_watch(
     api: &mut ApiServerClient<Channel>,
     kubelet: &mut KubeletClient<Channel>,
     node_name: &str,
-    capacity: &Resources,
 ) -> Result<()> {
+    // Re-read on every attempt rather than once at startup: it's two cheap
+    // reads, it keeps a transient failure (an unreadable /proc/meminfo in a
+    // locked-down container) on the retry path where it gets logged, and it
+    // picks up capacity that changed while we were disconnected.
+    let capacity = detect_capacity().context("failed to detect node capacity")?;
+
     api.update_node_status(UpdateNodeStatusRequest {
         node: Some(Node {
             name: node_name.to_string(),
             // Discarded and replaced by the store either way: the API is the
             // sole writer of node status, the agent only owns capacity.
             status: NodeStatus::Ready as i32,
-            capacity: Some(*capacity),
-            allocatable: Some(*capacity),
+            capacity: Some(capacity),
+            allocatable: Some(capacity),
         }),
     })
     .await

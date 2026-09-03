@@ -17,8 +17,9 @@
 #                                      expects barenetes-<name>-linux-x86_64 files)
 #   --with-etcd                       Install and run a local etcd for the API server's store
 #   --etcd-endpoints URL[,URL...]     Point the API server at an existing etcd instead
-#   --server URL                      API server address for the scheduler (control-plane/all;
-#                                      default: http://127.0.0.1:50052)
+#   --server URL                      API server address for the scheduler and agent
+#                                      (required for --role worker; default:
+#                                      http://127.0.0.1:50052 for control-plane/all)
 #   --node-id N                       CNI BARENETES_NODE_ID, 0-255 (worker/all; default: 0)
 #   --node-ip IP                      CNI BARENETES_NODE_IP (worker/all, for multi-node VXLAN overlay)
 #   --remote-node-ips IP[,IP...]      CNI BARENETES_REMOTE_NODE_IPS (worker/all, for multi-node overlay)
@@ -36,6 +37,7 @@ ROLE="control-plane"
 WITH_ETCD=false
 ETCD_ENDPOINTS=""
 SERVER="http://127.0.0.1:50052"
+SERVER_SET=false
 NODE_ID=""
 NODE_IP=""
 REMOTE_NODE_IPS=""
@@ -74,8 +76,9 @@ Options:
                                      expects barenetes-<name>-linux-x86_64 files)
   --with-etcd                       Install and run a local etcd for the API server's store
   --etcd-endpoints URL[,URL...]     Point the API server at an existing etcd instead
-  --server URL                      API server address for the scheduler (control-plane/all;
-                                     default: http://127.0.0.1:50052)
+  --server URL                      API server address for the scheduler and agent
+                                     (required for --role worker; default:
+                                     http://127.0.0.1:50052 for control-plane/all)
   --node-id N                       CNI BARENETES_NODE_ID, 0-255 (worker/all; default: 0)
   --node-ip IP                      CNI BARENETES_NODE_IP (worker/all, for multi-node VXLAN overlay)
   --remote-node-ips IP[,IP...]      CNI BARENETES_REMOTE_NODE_IPS (worker/all, for multi-node overlay)
@@ -96,7 +99,7 @@ parse_args() {
       --local-dist) LOCAL_DIST_DIR="$2"; shift 2 ;;
       --with-etcd) WITH_ETCD=true; shift ;;
       --etcd-endpoints) ETCD_ENDPOINTS="$2"; shift 2 ;;
-      --server) SERVER="$2"; shift 2 ;;
+      --server) SERVER="$2"; SERVER_SET=true; shift 2 ;;
       --node-id) NODE_ID="$2"; shift 2 ;;
       --node-ip) NODE_IP="$2"; shift 2 ;;
       --remote-node-ips) REMOTE_NODE_IPS="$2"; shift 2 ;;
@@ -109,6 +112,13 @@ parse_args() {
     control-plane|worker|all) ;;
     *) die "--role must be one of: control-plane, worker, all" ;;
   esac
+
+  # A worker is by definition not the control-plane host, so the loopback
+  # default can never be right there -- the agent would sit retrying against
+  # nothing forever. --role all is a single-box install, where it is right.
+  if [[ "$ROLE" == "worker" && "$SERVER_SET" != true ]]; then
+    die "--role worker requires --server URL (the control-plane API server, e.g. --server http://192.168.1.10:50052)"
+  fi
 }
 
 require_root() {
@@ -279,6 +289,7 @@ install_worker() {
 
   write_conf "${CONF_DIR}/agent.env" <<-EOF
 		RUST_LOG=info
+		BARENETES_SERVER=${SERVER}
 		EOF
 
   install_binary agent
