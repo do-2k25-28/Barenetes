@@ -257,11 +257,7 @@ mod tests {
             cpu: 1000,
             memory: 1000,
         });
-        service
-            .store
-            .upsert_and_publish_node(node)
-            .await
-            .unwrap();
+        service.store.upsert_and_publish_node(node).await.unwrap();
 
         let mut pod = test_support::pod_detail("default", "web");
         pod.node_name = "node-1".to_string();
@@ -293,11 +289,7 @@ mod tests {
             cpu: 1000,
             memory: 1000,
         });
-        service
-            .store
-            .upsert_and_publish_node(node)
-            .await
-            .unwrap();
+        service.store.upsert_and_publish_node(node).await.unwrap();
 
         let mut pod = test_support::pod_detail("default", "web");
         pod.node_name = "node-2".to_string();

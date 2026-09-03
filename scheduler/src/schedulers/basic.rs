@@ -31,7 +31,13 @@ impl BasicScheduler {
         self.claimed.remove(name);
     }
 
-    pub fn record_placement(&mut self, namespace: &str, name: &str, node_name: &str, limits: Resources) {
+    pub fn record_placement(
+        &mut self,
+        namespace: &str,
+        name: &str,
+        node_name: &str,
+        limits: Resources,
+    ) {
         let key = (namespace.to_string(), name.to_string());
         if let Some((existing_node, existing_limits)) = self.placements.get(&key) {
             if existing_node == node_name && *existing_limits == limits {

@@ -84,7 +84,12 @@ async fn register_and_watch(
         match event.action() {
             watch_desired_state_event::Action::Run => {
                 let Some(pod) = event.pod else { continue };
-                match kubelet.apply_pod(ApplyPodRequest { pod: Some(pod.clone()) }).await {
+                match kubelet
+                    .apply_pod(ApplyPodRequest {
+                        pod: Some(pod.clone()),
+                    })
+                    .await
+                {
                     Ok(_) => {
                         report_pod_status(api, &pod, PodStatus::Running, None).await;
                     }
