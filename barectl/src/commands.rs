@@ -267,7 +267,9 @@ fn matches_filters(pod: &PodDetail, args: &GetPodArgs) -> bool {
         return false;
     }
     if let Some(image) = &args.image
-        && !pod_containers(pod).iter().any(|c| &c.image == image)
+        && !pod_containers(pod)
+            .iter()
+            .any(|c| c.image.contains(image.as_str()))
     {
         return false;
     }
@@ -379,5 +381,64 @@ fn protocol_str(protocol: i32) -> &'static str {
         Ok(Protocol::Tcp) => "tcp",
         Ok(Protocol::Udp) => "udp",
         Err(_) => "unknown",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pod_detail(namespace: &str, name: &str, image: &str) -> PodDetail {
+        PodDetail {
+            core: Some(PodWithSpec {
+                pod: Some(Pod {
+                    name: name.to_string(),
+                    ..Default::default()
+                }),
+                spec: Some(PodSpec {
+                    namespace: namespace.to_string(),
+                    containers: vec![Container {
+                        name: name.to_string(),
+                        image: image.to_string(),
+                        ..Default::default()
+                    }],
+                }),
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn args(name: Option<&str>, namespace: Option<&str>, image: Option<&str>) -> GetPodArgs {
+        GetPodArgs {
+            name: name.map(String::from),
+            namespace: namespace.map(String::from),
+            image: image.map(String::from),
+        }
+    }
+
+    #[test]
+    fn image_filter_matches_a_substring_of_the_full_reference() {
+        let pod = pod_detail("default", "web", "docker.io/library/nginx:alpine");
+        assert!(matches_filters(&pod, &args(None, None, Some("nginx"))));
+    }
+
+    #[test]
+    fn image_filter_rejects_pods_without_the_substring() {
+        let pod = pod_detail("default", "web", "docker.io/library/nginx:alpine");
+        assert!(!matches_filters(&pod, &args(None, None, Some("redis"))));
+    }
+
+    #[test]
+    fn name_filter_is_exact() {
+        let pod = pod_detail("default", "web", "nginx:alpine");
+        assert!(matches_filters(&pod, &args(Some("web"), None, None)));
+        assert!(!matches_filters(&pod, &args(Some("we"), None, None)));
+    }
+
+    #[test]
+    fn namespace_filter_is_exact() {
+        let pod = pod_detail("default", "web", "nginx:alpine");
+        assert!(matches_filters(&pod, &args(None, Some("default"), None)));
+        assert!(!matches_filters(&pod, &args(None, Some("other"), None)));
     }
 }
