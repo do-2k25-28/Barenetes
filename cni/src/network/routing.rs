@@ -27,14 +27,8 @@ pub(crate) fn validate_configuration(local_node: u8) -> io::Result<()> {
     Ok(())
 }
 
-pub(crate) fn ensure_routes(vlan: u8, local_node: u8) -> io::Result<()> {
+pub(crate) fn ensure_routes(vlan: u8) -> io::Result<()> {
     for (remote_node, remote_ip) in remote_nodes()? {
-        if remote_node == local_node {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "remote node id must differ from the local node id",
-            ));
-        }
         let subnet = format!("10.{vlan}.{remote_node}.0/24");
         let remote_ip = remote_ip.to_string();
         run(IP, &["route", "replace", &subnet, "via", &remote_ip])?;

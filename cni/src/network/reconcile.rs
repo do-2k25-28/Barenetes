@@ -32,7 +32,7 @@ fn drop_stale_records(state: &StateStore) -> io::Result<Vec<WorkloadRecord>> {
                     record.host_interface
                 );
                 if let Err(error) =
-                    super::firewall::delete_mappings(&record.ip_address, &record.port_mappings)
+                    super::port_forward::delete_mappings(&record.ip_address, &record.port_mappings)
                 {
                     eprintln!(
                         "cni: failed to remove port mappings for {}/{}: {error}",
@@ -124,7 +124,8 @@ fn reinstall_vlan_networking(live: &[WorkloadRecord]) -> io::Result<()> {
 
 fn reinstall_port_mappings(live: &[WorkloadRecord]) {
     for record in live {
-        if let Err(error) = super::firewall::add_mappings(&record.ip_address, &record.port_mappings)
+        if let Err(error) =
+            super::port_forward::add_mappings(&record.ip_address, &record.port_mappings)
         {
             eprintln!(
                 "cni: failed to reinstall port mappings for {}/{}: {error}",

@@ -51,13 +51,11 @@ pub(crate) fn ensure(vlan: u8, node: u8) -> io::Result<Ipv4Addr> {
     let interface_mtu = mtu()?.to_string();
     run(IP, &["link", "set", "dev", &name, "mtu", &interface_mtu])?;
     run(IP, &["link", "set", "dev", &name, "up"])?;
-    let legacy_gateway = format!("{gateway}/16");
-    let _ = run(IP, &["address", "del", &legacy_gateway, "dev", &name]);
     run(
         IP,
         &["address", "replace", &format!("{gateway}/24"), "dev", &name],
     )?;
-    super::routing::ensure_routes(vlan, node)?;
+    super::routing::ensure_routes(vlan)?;
     super::firewall::ensure_tenant_nat(vlan, node)?;
     Ok(gateway)
 }
