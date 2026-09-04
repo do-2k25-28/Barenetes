@@ -130,6 +130,17 @@ sudo ./deploy/install.sh --role worker          # cni + agent
 sudo ./deploy/install.sh --role all             # single-node setup
 ```
 
+The `barectl` CLI is also published as a `.deb` and a `.rpm` on each release,
+so it can be installed directly on Debian/Ubuntu and Fedora/RHEL-family
+distros:
+
+```sh
+# Debian / Ubuntu
+sudo apt install ./barenetes-barectl_*.deb
+# Fedora / RHEL / Rocky / AlmaLinux
+sudo dnf install ./barenetes-barectl-*.rpm
+```
+
 See [`deploy/README.md`](deploy/README.md) for options (etcd, multi-node CNI
 overlay, etc.) and current limitations.
 

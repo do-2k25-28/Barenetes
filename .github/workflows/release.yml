@@ -2,6 +2,8 @@ name: Release
 
 # Builds all workspace binaries in release mode and publishes them as assets
 # on a GitHub Release, so deploy/install.sh can fetch them with a plain curl.
+# The barectl CLI is additionally published as a .deb and a .rpm, so it can
+# be installed directly on Debian/Ubuntu and Fedora/RHEL-family distros.
 #
 # Triggered by pushing a version tag (v1.2.3), or manually for a re-run.
 on:
@@ -67,6 +69,69 @@ jobs:
           for bin in agent api barectl cni scheduler; do
             install -m 0755 "target/release/$bin" "dist/barenetes-$bin-linux-x86_64"
           done
+
+      - name: Install rpmbuild
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends rpm
+
+      - name: Package barectl as .deb
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)"
+          PKG="barenetes-barectl"
+          ARCH="amd64"
+
+          ROOT="pkg/${PKG}_${VERSION}_${ARCH}"
+          mkdir -p "${ROOT}/usr/bin" "${ROOT}/DEBIAN"
+          install -m 0755 target/release/barectl "${ROOT}/usr/bin/barectl"
+
+          cat > "${ROOT}/DEBIAN/control" <<EOF
+          Package: ${PKG}
+          Version: ${VERSION}
+          Section: utils
+          Priority: optional
+          Architecture: ${ARCH}
+          Maintainer: do-2k25-28 <do-2k25-28@users.noreply.github.com>
+          Description: Barenetes CLI (kubectl-style client for the Barenetes API server)
+          EOF
+          cat > "${ROOT}/DEBIAN/md5sums" <<EOF
+          $(md5sum "${ROOT}/usr/bin/barectl" | awk '{print $1"  usr/bin/barectl"}')
+          EOF
+
+          dpkg-deb --build --root-owner-group "${ROOT}" "dist/${PKG}_${VERSION}_${ARCH}.deb"
+
+      - name: Package barectl as .rpm
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)"
+          PKG="barenetes-barectl"
+          ARCH="x86_64"
+
+          export RPMBUILD_TOPDIR="$(mktemp -d)"
+          mkdir -p "${RPMBUILD_TOPDIR}"/{BUILD,BUILDROOT,RPMS,SOURCES,SRPMS,specs}
+          # %install runs in rpmbuild's own build dir, so the binary must be
+          # referenced by absolute path.
+          BIN="$(pwd)/target/release/barectl"
+          cat > "${RPMBUILD_TOPDIR}/specs/${PKG}.spec" <<EOF
+          Name: ${PKG}
+          Version: ${VERSION}
+          Release: 1%{?dist}
+          Summary: Barenetes CLI (kubectl-style client for the Barenetes API server)
+          License: MIT
+          URL: https://github.com/do-2k25-28/Barenetes
+          BuildArch: ${ARCH}
+          %description
+          Barenetes CLI (kubectl-style client for the Barenetes API server)
+
+          %install
+          mkdir -p %{buildroot}/usr/bin
+          install -m 0755 ${BIN} %{buildroot}/usr/bin/barectl
+
+          %files
+          /usr/bin/barectl
+          EOF
+
+          rpmbuild --bb --define "_topdir ${RPMBUILD_TOPDIR}" "${RPMBUILD_TOPDIR}/specs/${PKG}.spec"
+          install -m 0644 "${RPMBUILD_TOPDIR}/RPMS/${ARCH}/${PKG}-${VERSION}-1.${ARCH}.rpm" "dist/${PKG}-${VERSION}-1.${ARCH}.rpm"
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
