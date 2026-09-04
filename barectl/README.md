@@ -83,7 +83,8 @@ barectl completion powershell | Out-String | Invoke-Expression
 ```
 
 For permanent completion, redirect the generated script to the completion
-directory used by your shell. For example, with Fish:
+directory used by your shell. Release packages install Bash, Zsh, and Fish
+completions automatically. For example, with Fish and a standalone binary:
 
 ```fish
 barectl completion fish > ~/.config/fish/completions/barectl.fish

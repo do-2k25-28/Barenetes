@@ -135,7 +135,8 @@ sudo ./deploy/install.sh --role all --node-name <name>                # single-n
 
 The `barectl` CLI is also published as a `.deb`, a `.rpm`, and a pacman
 `.pkg.tar.zst` on each release, so it can be installed directly on
-Debian/Ubuntu, Fedora/RHEL-family, and Arch-family distros:
+Debian/Ubuntu, Fedora/RHEL-family, and Arch-family distros. These packages
+include shell completions for Bash, Zsh, and Fish:
 
 ```sh
 # Debian / Ubuntu
