@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use proto::api::v1::api_server_client::ApiServerClient;
 use proto::api::v1::{AssignPodRequest, WatchNodesRequest, WatchPodsRequest, assign_pod_request};
-use proto::shared::v1::{EventType, Pod};
+use proto::shared::v1::{EventType, NodeStatus, Pod};
 use proto::tls::{TlsArgs, TlsMode, load_client_tls_config, tls_mode};
 use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
@@ -111,12 +111,66 @@ async fn watch_nodes(
         let mut guard = state.lock().await;
         if event_type == EventType::Deleted {
             guard.scheduler.remove_node(&node.name);
+            drop(guard);
         } else {
+            let node_name = node.name.clone();
+            let became_not_ready = node.status() == NodeStatus::NotReady;
             guard.scheduler.upsert_node(node);
+            drop(guard);
+
+            if became_not_ready {
+                reschedule_orphaned_pods(&mut client, &state, &node_name).await?;
+            }
         }
-        drop(guard);
 
         retry_pending(&mut client, &state).await?;
+    }
+
+    Ok(())
+}
+
+/// A node just went NOT_READY: every pod placed there is no longer somewhere
+/// we can vouch for. Evict each from the scheduler's bookkeeping, tell the API
+/// to mark it UNKNOWN (clearing its stale `node_name`), then immediately retry
+/// placement exactly like `try_schedule` does for a brand-new pod — landing on
+/// PENDING if a fit is found elsewhere, or NO_NODE_AVAILABLE (retried later via
+/// `pending`, same as any other unschedulable pod) if not.
+async fn reschedule_orphaned_pods(
+    client: &mut ApiServerClient<Channel>,
+    state: &Arc<Mutex<SchedulerState>>,
+    node_name: &str,
+) -> Result<()> {
+    let orphaned = state.lock().await.scheduler.evict_node(node_name);
+
+    for (namespace, name, limits) in orphaned {
+        let reason = format!("node {node_name} became NotReady");
+        let result = client
+            .assign_pod(AssignPodRequest {
+                name: name.clone(),
+                namespace: namespace.clone(),
+                outcome: Some(assign_pod_request::Outcome::OrphanedReason(reason)),
+            })
+            .await;
+
+        match result {
+            Ok(_) => {}
+            Err(status) if status.code() == tonic::Code::NotFound => {
+                println!("Pod {namespace}/{name} no longer exists, skipping reschedule");
+                continue;
+            }
+            Err(status) => {
+                println!("Failed to mark {namespace}/{name} orphaned: {status}");
+                continue;
+            }
+        }
+
+        let pod = Pod {
+            name: name.clone(),
+            status: 0,
+            requests: None,
+            limits: Some(limits),
+        };
+        try_schedule(client, state, &namespace, &name, &pod, false).await?;
     }
 
     Ok(())
