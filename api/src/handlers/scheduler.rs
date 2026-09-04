@@ -102,6 +102,7 @@ impl ApiService {
                 let found = self
                     .store
                     .update_and_publish_pod(&namespace, &name, EventType::Modified, |detail| {
+                        detail.node_name = String::new();
                         detail.unschedulable_reason = Some(reason);
                         if let Some(core_pod) =
                             detail.core.as_mut().and_then(|core| core.pod.as_mut())
@@ -417,6 +418,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_assign_pod_unschedulable_clears_a_stale_node_name() {
+        let service = test_support::service();
+        let mut pod = test_support::pod_detail("default", "my-pod");
+        pod.node_name = "node-a".to_string();
+        service.store.upsert_pod(pod).await.unwrap();
+
+        service
+            .assign_pod_impl(assign_request(
+                "default",
+                "my-pod",
+                unschedulable("no node with enough memory"),
+            ))
+            .await
+            .expect("an unschedulable outcome should still be accepted");
+
+        let stored = service
+            .store
+            .get_pod("default", "my-pod")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stored.node_name, "",
+            "a pod that couldn't be rescheduled must not keep pointing at its old node"
+        );
+    }
+
+    #[tokio::test]
     async fn test_assign_pod_clears_unschedulable_reason_on_placement() {
         let service = test_support::service();
         let mut pod = test_support::pod_detail("default", "my-pod");
@@ -511,7 +540,7 @@ mod tests {
     async fn test_assign_pod_unknown_pod_is_not_found() {
         let service = test_support::service();
 
-        for outcome in [placed_on("node-a"), unschedulable("no fit")] {
+        for outcome in [placed_on("node-a"), unschedulable("no fit"), orphaned("no fit")] {
             let err = service
                 .assign_pod_impl(assign_request("default", "ghost", outcome))
                 .await

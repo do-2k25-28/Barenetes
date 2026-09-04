@@ -154,7 +154,7 @@ pub async fn get_pod(server: &str, tls: &TlsArgs, args: GetPodArgs) -> Result<()
     pods.sort_by(|a, b| (pod_namespace(a), pod_name(a)).cmp(&(pod_namespace(b), pod_name(b))));
 
     println!(
-        "{:<15} {:<12} {:<10} {:<15} IMAGE",
+        "{:<15} {:<12} {:<16} {:<15} IMAGE",
         "NAME", "NAMESPACE", "STATUS", "NODE"
     );
     for pod in &pods {
@@ -165,7 +165,7 @@ pub async fn get_pod(server: &str, tls: &TlsArgs, args: GetPodArgs) -> Result<()
             .join(",");
         let status = format!("{:?}", pod_status(pod));
         println!(
-            "{:<15} {:<12} {:<10} {:<15} {}",
+            "{:<15} {:<12} {:<16} {:<15} {}",
             pod_name(pod),
             pod_namespace(pod),
             status,

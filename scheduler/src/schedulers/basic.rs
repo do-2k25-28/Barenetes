@@ -26,10 +26,29 @@ impl BasicScheduler {
         self.nodes.insert(node.name.clone(), node);
     }
 
+    /// Drops `name` and its claimed/placement bookkeeping entirely — unlike
+    /// `evict_node`, this does NOT return the dropped pods for rescheduling.
+    /// Correct only because nothing today ever removes a node this way (no
+    /// `Deleted` node event is published anywhere in the API server); if a
+    /// node-deletion path is ever added, route it through `evict_node` plus a
+    /// reschedule attempt instead of calling this directly, or pods on a
+    /// deleted node will silently vanish from all scheduler bookkeeping.
     pub fn remove_node(&mut self, name: &str) {
         self.nodes.remove(name);
         self.claimed.remove(name);
         self.placements.retain(|_, (node, _)| node != name);
+    }
+
+    /// Whether `node_name` has been explicitly reported `NOT_READY`. An unseen
+    /// node (no `WatchNodes` event has arrived for it yet) and a node in any
+    /// other status (`READY`, `CORDON`, `DRAIN`) both return `false` — only a
+    /// confirmed `NOT_READY` is grounds to distrust an already-recorded pod
+    /// assignment to it. `CORDON`/`DRAIN` handling is out of scope here: a
+    /// cordoned node's existing pods are still genuinely running there.
+    pub fn is_confirmed_not_ready(&self, node_name: &str) -> bool {
+        self.nodes
+            .get(node_name)
+            .is_some_and(|node| node.status() == NodeStatus::NotReady)
     }
 
     pub fn record_placement(
@@ -327,5 +346,19 @@ mod tests {
             Some(limits(1000, 1000))
         );
         assert!(!scheduler.release_placement("default", "web"));
+    }
+
+    #[test]
+    fn is_confirmed_not_ready_true_only_for_a_known_not_ready_node() {
+        let mut scheduler = BasicScheduler::default();
+        assert!(!scheduler.is_confirmed_not_ready("unseen"));
+
+        scheduler.upsert_node(get_node("ready-node", limits(1000, 1000), limits(1000, 1000)));
+        assert!(!scheduler.is_confirmed_not_ready("ready-node"));
+
+        let mut dead = get_node("dead-node", limits(1000, 1000), limits(1000, 1000));
+        dead.status = NodeStatus::NotReady.into();
+        scheduler.upsert_node(dead);
+        assert!(scheduler.is_confirmed_not_ready("dead-node"));
     }
 }
