@@ -10,6 +10,9 @@ pub enum CliError {
         source: tonic::transport::Error,
     },
 
+    #[error("TLS configuration error: {0}")]
+    Tls(#[from] anyhow::Error),
+
     #[error("api returned no resource for this request")]
     EmptyResponse,
 

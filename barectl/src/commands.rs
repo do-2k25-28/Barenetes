@@ -6,13 +6,52 @@ use proto::shared::v1::{
     Container, Node, NodeStatus, Pod, PodDetail, PodSpec, PodStatus, PodWithSpec, Protocol,
     Resources,
 };
+use proto::tls::{TlsArgs, TlsMode, load_client_tls_config, tls_mode};
 use tonic::transport::Channel;
 
 use crate::cli::{CreatePodArgs, DeletePodArgs, GetNodeArgs, GetPodArgs};
 use crate::error::CliError;
 use crate::manifest::PodManifest;
 
-pub async fn create_pod(server: &str, args: CreatePodArgs) -> Result<(), CliError> {
+/// Connects to the API server, plaintext or mTLS depending on `tls`. In mTLS mode
+/// `--tls-server-name` must be set, since the certs `barenetes-pki` issues carry no
+/// public DNS name for `tonic` to default the expected server identity to.
+async fn connect(server: &str, tls: &TlsArgs) -> Result<ApiServerClient<Channel>, CliError> {
+    match tls_mode(tls)? {
+        TlsMode::Plaintext => {
+            ApiServerClient::connect(server.to_string())
+                .await
+                .map_err(|source| CliError::Connect {
+                    addr: server.to_string(),
+                    source,
+                })
+        }
+        TlsMode::Mtls { cert, key, ca } => {
+            let server_name = tls.tls_server_name.as_deref().ok_or_else(|| {
+                CliError::InvalidUsage(
+                    "--tls-server-name is required when connecting over mTLS (--tls-cert/--tls-key/--tls-ca set)"
+                        .to_string(),
+                )
+            })?;
+            let channel = Channel::from_shared(server.to_string())
+                .map_err(|source| CliError::Tls(source.into()))?
+                .tls_config(load_client_tls_config(&cert, &key, &ca, server_name)?)
+                .map_err(|source| CliError::Connect {
+                    addr: server.to_string(),
+                    source,
+                })?
+                .connect()
+                .await
+                .map_err(|source| CliError::Connect {
+                    addr: server.to_string(),
+                    source,
+                })?;
+            Ok(ApiServerClient::new(channel))
+        }
+    }
+}
+
+pub async fn create_pod(server: &str, tls: &TlsArgs, args: CreatePodArgs) -> Result<(), CliError> {
     let pod = build_pod(args)?;
     let name = pod.pod.as_ref().map(|p| p.name.clone()).unwrap_or_default();
     let namespace = pod
@@ -21,12 +60,7 @@ pub async fn create_pod(server: &str, args: CreatePodArgs) -> Result<(), CliErro
         .map(|s| s.namespace.clone())
         .unwrap_or_default();
 
-    let mut client = ApiServerClient::connect(server.to_string())
-        .await
-        .map_err(|source| CliError::Connect {
-            addr: server.to_string(),
-            source,
-        })?;
+    let mut client = connect(server, tls).await?;
     client
         .create_pod(CreatePodRequest { pod: Some(pod) })
         .await?;
@@ -94,13 +128,8 @@ fn resources(cpu: Option<i32>, memory: Option<i32>) -> Result<Option<Resources>,
     }
 }
 
-pub async fn get_pod(server: &str, args: GetPodArgs) -> Result<(), CliError> {
-    let mut client = ApiServerClient::connect(server.to_string())
-        .await
-        .map_err(|source| CliError::Connect {
-            addr: server.to_string(),
-            source,
-        })?;
+pub async fn get_pod(server: &str, tls: &TlsArgs, args: GetPodArgs) -> Result<(), CliError> {
+    let mut client = connect(server, tls).await?;
 
     let response = client.list_pods(ListPodsRequest {}).await?;
     let mut pods = response.into_inner().pods;
@@ -180,13 +209,8 @@ fn pod_containers(pod: &PodDetail) -> &[Container] {
         .unwrap_or_default()
 }
 
-pub async fn get_node(server: &str, args: GetNodeArgs) -> Result<(), CliError> {
-    let client = ApiServerClient::connect(server.to_string())
-        .await
-        .map_err(|source| CliError::Connect {
-            addr: server.to_string(),
-            source,
-        })?;
+pub async fn get_node(server: &str, tls: &TlsArgs, args: GetNodeArgs) -> Result<(), CliError> {
+    let client = connect(server, tls).await?;
 
     match args.name {
         None => list_nodes(client).await,
@@ -276,13 +300,8 @@ fn matches_filters(pod: &PodDetail, args: &GetPodArgs) -> bool {
     true
 }
 
-pub async fn delete_pod(server: &str, args: DeletePodArgs) -> Result<(), CliError> {
-    let mut client = ApiServerClient::connect(server.to_string())
-        .await
-        .map_err(|source| CliError::Connect {
-            addr: server.to_string(),
-            source,
-        })?;
+pub async fn delete_pod(server: &str, tls: &TlsArgs, args: DeletePodArgs) -> Result<(), CliError> {
+    let mut client = connect(server, tls).await?;
 
     client
         .delete_pod(DeletePodRequest {

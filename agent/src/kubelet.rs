@@ -4,6 +4,7 @@ use std::time::Duration;
 use proto::agent::v1::kubelet_server::Kubelet;
 use proto::agent::v1::{ApplyPodRequest, ApplyPodResponse, DeletePodRequest, DeletePodResponse};
 use proto::cni::v1::{NetworkRef, WorkloadRef};
+use proto::tls_identity::Role;
 use tonic::{Request, Response, Status};
 
 use crate::cni::Cni;
@@ -15,6 +16,17 @@ const DEFAULT_INTERFACE: &str = "eth0";
 const DEFAULT_GRACE_PERIOD: Duration = Duration::from_secs(30);
 /// Rolling back must not stall the failing call for the whole grace period.
 const ROLLBACK_GRACE_PERIOD: Duration = Duration::from_secs(5);
+
+/// Rejects `request` unless its mTLS peer is authorized for `Role::Node` (a
+/// no-op in plaintext mode, see [`proto::tls_identity::check_role`]). Every
+/// cluster certificate authenticates against the same CA, so without this
+/// gate any cert -- a CLI cert, say -- could call `ApplyPod`/`DeletePod`
+/// directly on a worker's agent, bypassing the API server and scheduler
+/// entirely. The only legitimate caller is this node's own agent process,
+/// looping `desired_state::run`'s watch back into its local Kubelet server.
+fn require_node_role<T>(request: &Request<T>) -> Result<(), Status> {
+    proto::tls_identity::check_role(&proto::tls_identity::peer(request), Role::Node)
+}
 
 pub struct KubeletService {
     containerd: Containerd,
@@ -129,6 +141,7 @@ impl Kubelet for KubeletService {
         &self,
         request: Request<ApplyPodRequest>,
     ) -> Result<Response<ApplyPodResponse>, Status> {
+        require_node_role(&request)?;
         let pod = request
             .into_inner()
             .pod
@@ -196,6 +209,7 @@ impl Kubelet for KubeletService {
         &self,
         request: Request<DeletePodRequest>,
     ) -> Result<Response<DeletePodResponse>, Status> {
+        require_node_role(&request)?;
         let request = request.into_inner();
         if request.pod_id.is_empty() {
             return Err(Status::invalid_argument("missing pod id"));

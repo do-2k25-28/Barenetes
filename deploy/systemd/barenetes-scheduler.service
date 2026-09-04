@@ -6,11 +6,25 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/barenetes-scheduler
+
+# DynamicUser/LoadCredential= reasoning: same as barenetes-api.service.
+# The cert/key/ca paths are passed as --tls-* flags on ExecStart= rather
+# than as BARENETES_TLS_* variables in scheduler.env, since
+# EnvironmentFile= unconditionally overrides Environment= regardless of
+# ordering in the unit, and scheduler.env's real (DynamicUser-unreadable)
+# paths would otherwise silently win over the %d ones. A CLI flag has no
+# such conflict: clap always prefers it over the matching env var.
+LoadCredential=tls-cert:/etc/barenetes/pki/issued/scheduler.pem
+LoadCredential=tls-key:/etc/barenetes/pki/issued/scheduler-key.pem
+LoadCredential=tls-ca:/etc/barenetes/pki/ca/ca.pem
+ExecStart=/usr/local/bin/barenetes-scheduler --tls-cert %d/tls-cert --tls-key %d/tls-key --tls-ca %d/tls-ca
 WorkingDirectory=/usr/local/bin
 
 # Written by deploy/install.sh. Must set BARENETES_SERVER (the scheduler
-# has no default: it needs to be told where the API server is).
+# has no default: it needs to be told where the API server is) and
+# BARENETES_TLS_SERVER_NAME (the CN the api's cert was issued for). Does
+# NOT carry BARENETES_TLS_CERT/_KEY/_CA: those are passed as --tls-* flags
+# above instead, see the LoadCredential= comment.
 EnvironmentFile=/etc/barenetes/scheduler.env
 
 TimeoutStopSec=15

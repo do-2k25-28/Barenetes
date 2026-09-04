@@ -62,7 +62,7 @@ Key design principles:
 
 ## Components
 
-Barenetes is a Cargo workspace composed of five crates, each mirroring a real Kubernetes component. All inter-component communication uses **gRPC / Protocol Buffers**.
+Barenetes is a Cargo workspace composed of six crates, each mirroring a real Kubernetes component (`pki` has no direct equivalent; it's the cluster's own mTLS bootstrap tool). All inter-component communication uses **gRPC / Protocol Buffers**, secured with mutual TLS.
 
 | Crate                     | Equivalent     | Role                                                 |
 | ------------------------- | -------------- | ---------------------------------------------------- |
@@ -71,6 +71,7 @@ Barenetes is a Cargo workspace composed of five crates, each mirroring a real Ku
 | `barectl`                 | kubectl        | CLI to interact with the API server                  |
 | `scheduler/reconciliator` | kube-scheduler | Assigns workloads to nodes                           |
 | `cni`                     | CNI plugin     | Manages pod networking                               |
+| `pki`                     | -              | Bootstraps the cluster's private mTLS CA and certs   |
 
 Proto definitions live in `proto/<component>/v1/`.
 
@@ -108,6 +109,7 @@ cargo build -p api
 cargo build -p barectl
 cargo build -p scheduler
 cargo build -p cni
+cargo build -p pki
 ```
 
 Run a component:
@@ -120,18 +122,19 @@ cargo run -p api
 
 ## Deploying
 
-Every tagged release (`vX.Y.Z`) publishes all five binaries as GitHub Release
+Every tagged release (`vX.Y.Z`) publishes all six binaries as GitHub Release
 assets. `deploy/install.sh` installs them as systemd services on a control
-plane and/or worker node:
+plane and/or worker node, and always sets up a private mTLS CA for the
+control plane's own services:
 
 ```sh
-sudo ./deploy/install.sh --role control-plane   # api + scheduler
-sudo ./deploy/install.sh --role worker          # cni + agent
-sudo ./deploy/install.sh --role all             # single-node setup
+sudo ./deploy/install.sh --role control-plane                        # api + scheduler, mTLS by default
+sudo ./deploy/install.sh --role worker --server https://<cp-ip>:50052 --node-name <name>   # cni + agent
+sudo ./deploy/install.sh --role all --node-name <name>                # single-node setup
 ```
 
 See [`deploy/README.md`](deploy/README.md) for options (etcd, multi-node CNI
-overlay, etc.) and current limitations.
+overlay, mTLS/PKI, etc.) and current limitations.
 
 ---
 

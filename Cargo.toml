@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["agent", "api", "barectl", "cni", "proto", "scheduler"]
+members = ["agent", "api", "barectl", "cni", "pki", "proto", "scheduler"]
 
 [workspace.package]
 version = "0.1.0"

@@ -6,13 +6,33 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/barenetes-api
+
+# DynamicUser gets a random uid at every start, which can't read the
+# 0600 root-owned key file at /etc/barenetes/pki/issued/api-key.pem.
+# LoadCredential= is systemd's own mechanism for handing root-only files
+# to a DynamicUser service: it copies them, readable only by this unit's
+# transient user, into a directory exposed as %d. The paths are passed as
+# --tls-* flags on ExecStart= rather than as BARENETES_TLS_* environment
+# variables: systemd's EnvironmentFile= (below) unconditionally overrides
+# Environment=, regardless of which is listed first in the unit, so a
+# real (unreadable) path in api.env would silently win over a %d one set
+# via Environment=. A CLI flag has no such conflict: clap always prefers
+# it over the matching env var. LoadCredential= fails the unit's startup
+# if the source file is missing; that's fine here since install.sh always
+# creates it (via `barenetes-pki init-ca`/`issue`) before enabling this
+# unit.
+LoadCredential=tls-cert:/etc/barenetes/pki/issued/api.pem
+LoadCredential=tls-key:/etc/barenetes/pki/issued/api-key.pem
+LoadCredential=tls-ca:/etc/barenetes/pki/ca/ca.pem
+ExecStart=/usr/local/bin/barenetes-api --tls-cert %d/tls-cert --tls-key %d/tls-key --tls-ca %d/tls-ca
 WorkingDirectory=/usr/local/bin
 
 # Written by deploy/install.sh. Holds RUST_LOG, BARENETES_API_ADDR
 # (0.0.0.0:50052, so remote workers can reach it) and, when --with-etcd or
 # --etcd-endpoints was used, BARENETES_ETCD_ENDPOINTS. Absent endpoints
-# means the in-memory store (fine for a single control-plane node / demo use).
+# means the in-memory store (fine for a single control-plane node / demo
+# use). Does NOT carry BARENETES_TLS_*: those are passed as --tls-* flags
+# above instead, see the LoadCredential= comment.
 EnvironmentFile=-/etc/barenetes/api.env
 
 TimeoutStopSec=30

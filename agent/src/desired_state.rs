@@ -14,6 +14,7 @@ use proto::api::v1::{
     watch_desired_state_event,
 };
 use proto::shared::v1::{Node, NodeStatus, PodStatus, PodWithSpec, Resources};
+use proto::tls::{TlsArgs, TlsMode, load_client_tls_config, tls_mode};
 use tokio_stream::StreamExt;
 use tonic::transport::{Channel, Endpoint};
 
@@ -24,15 +25,16 @@ const RETRY_DELAY: Duration = Duration::from_secs(5);
 /// Runs forever: register, watch, react to events; on any error (API server
 /// unreachable, stream dropped, ...) log it and retry after `RETRY_DELAY`
 /// rather than taking the whole agent process down with it.
-pub async fn run(server_addr: String, node_name: String, kubelet_addr: String) -> Result<()> {
+pub async fn run(
+    server_addr: String,
+    node_name: String,
+    kubelet_addr: String,
+    tls: TlsArgs,
+) -> Result<()> {
     // Lazy channels: the actual TCP connect happens on first RPC, not here, so
     // this doesn't race the Kubelet gRPC server's own bind in main().
-    let api_channel = Endpoint::from_shared(server_addr)
-        .context("invalid API server address")?
-        .connect_lazy();
-    let kubelet_channel = Endpoint::from_shared(format!("http://{kubelet_addr}"))
-        .context("invalid local kubelet address")?
-        .connect_lazy();
+    let api_channel = build_api_channel(server_addr, &tls)?;
+    let kubelet_channel = build_kubelet_channel(&kubelet_addr, &tls, &node_name)?;
 
     let mut api = ApiServerClient::new(api_channel);
     let mut kubelet = KubeletClient::new(kubelet_channel);
@@ -42,6 +44,47 @@ pub async fn run(server_addr: String, node_name: String, kubelet_addr: String) -
             eprintln!("agent: desired-state watch failed, retrying in {RETRY_DELAY:?}: {error:#}");
         }
         tokio::time::sleep(RETRY_DELAY).await;
+    }
+}
+
+/// Builds the (lazy) channel to the API server, plaintext or mTLS depending
+/// on `tls`. In mTLS mode `--tls-server-name` must be set, since the certs
+/// `barenetes-pki` issues carry no public DNS name for `tonic` to default
+/// the expected server identity to.
+fn build_api_channel(server_addr: String, tls: &TlsArgs) -> Result<Channel> {
+    let endpoint = Endpoint::from_shared(server_addr).context("invalid API server address")?;
+
+    match tls_mode(tls)? {
+        TlsMode::Plaintext => Ok(endpoint.connect_lazy()),
+        TlsMode::Mtls { cert, key, ca } => {
+            let server_name = tls.tls_server_name.as_deref().context(
+                "--tls-server-name is required when connecting over mTLS (--tls-cert/--tls-key/--tls-ca set)",
+            )?;
+            let endpoint =
+                endpoint.tls_config(load_client_tls_config(&cert, &key, &ca, server_name)?)?;
+            Ok(endpoint.connect_lazy())
+        }
+    }
+}
+
+/// Builds the (lazy) channel to the local Kubelet service, matching whatever
+/// mode `main` started the Kubelet listener in: when mTLS is configured that
+/// listener requires client certificates (see `main`), so this in-process
+/// client must present one too or every `ApplyPod`/`DeletePod` call fails.
+/// The expected server identity is this node's own name: the Kubelet
+/// listener presents the same cert this agent uses as its own client
+/// identity against the API server, since both are the same node.
+fn build_kubelet_channel(kubelet_addr: &str, tls: &TlsArgs, node_name: &str) -> Result<Channel> {
+    match tls_mode(tls)? {
+        TlsMode::Plaintext => Ok(Endpoint::from_shared(format!("http://{kubelet_addr}"))
+            .context("invalid local kubelet address")?
+            .connect_lazy()),
+        TlsMode::Mtls { cert, key, ca } => {
+            let endpoint = Endpoint::from_shared(format!("https://{kubelet_addr}"))
+                .context("invalid local kubelet address")?
+                .tls_config(load_client_tls_config(&cert, &key, &ca, node_name)?)?;
+            Ok(endpoint.connect_lazy())
+        }
     }
 }
 

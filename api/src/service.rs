@@ -17,6 +17,8 @@ use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::{Stream, StreamExt};
 use tonic::{Request, Response, Status};
 
+use proto::tls_identity::Role;
+
 use crate::store::Store;
 
 /// Stream types for the 3 server-streaming RPCs.
@@ -107,6 +109,15 @@ pub struct ApiService {
     pub store: Arc<Store>,
 }
 
+/// Rejects `request` unless its mTLS peer is authorized for `role` (a no-op
+/// in plaintext mode, see [`proto::tls_identity::check_role`]). Every
+/// cluster certificate authenticates against the same CA, so without this
+/// gate any cert -- including a worker's, distributed to every node --
+/// would be authorized to call every RPC.
+fn require_role<T>(request: &Request<T>, role: Role) -> Result<(), Status> {
+    proto::tls_identity::check_role(&proto::tls_identity::peer(request), role)
+}
+
 #[tonic::async_trait]
 impl ApiServer for ApiService {
     // --- CLI → API
@@ -114,36 +125,42 @@ impl ApiServer for ApiService {
         &self,
         request: Request<CreatePodRequest>,
     ) -> Result<Response<CreatePodResponse>, Status> {
+        require_role(&request, Role::Cli)?;
         crate::telemetry::traced("create_pod", self.create_pod_impl(request)).await
     }
     async fn delete_pod(
         &self,
         request: Request<DeletePodRequest>,
     ) -> Result<Response<DeletePodResponse>, Status> {
+        require_role(&request, Role::Cli)?;
         crate::telemetry::traced("delete_pod", self.delete_pod_impl(request)).await
     }
     async fn get_pod(
         &self,
         request: Request<GetPodRequest>,
     ) -> Result<Response<GetPodResponse>, Status> {
+        require_role(&request, Role::Cli)?;
         crate::telemetry::traced("get_pod", self.get_pod_impl(request)).await
     }
     async fn list_pods(
         &self,
         request: Request<ListPodsRequest>,
     ) -> Result<Response<ListPodsResponse>, Status> {
+        require_role(&request, Role::Cli)?;
         crate::telemetry::traced("list_pods", self.list_pods_impl(request)).await
     }
     async fn get_node(
         &self,
         request: Request<GetNodeRequest>,
     ) -> Result<Response<GetNodeResponse>, Status> {
+        require_role(&request, Role::Cli)?;
         crate::telemetry::traced("get_node", self.get_node_impl(request)).await
     }
     async fn list_nodes(
         &self,
         request: Request<ListNodesRequest>,
     ) -> Result<Response<ListNodesResponse>, Status> {
+        require_role(&request, Role::Cli)?;
         crate::telemetry::traced("list_nodes", self.list_nodes_impl(request)).await
     }
 
@@ -153,6 +170,7 @@ impl ApiServer for ApiService {
         &self,
         request: Request<WatchPodsRequest>,
     ) -> Result<Response<Self::WatchPodsStream>, Status> {
+        require_role(&request, Role::Scheduler)?;
         crate::telemetry::traced("watch_pods", self.watch_pods_impl(request)).await
     }
     type WatchNodesStream = NodeEventStream;
@@ -160,12 +178,14 @@ impl ApiServer for ApiService {
         &self,
         request: Request<WatchNodesRequest>,
     ) -> Result<Response<Self::WatchNodesStream>, Status> {
+        require_role(&request, Role::Scheduler)?;
         crate::telemetry::traced("watch_nodes", self.watch_nodes_impl(request)).await
     }
     async fn assign_pod(
         &self,
         request: Request<AssignPodRequest>,
     ) -> Result<Response<AssignPodResponse>, Status> {
+        require_role(&request, Role::Scheduler)?;
         crate::telemetry::traced("assign_pod", self.assign_pod_impl(request)).await
     }
 
@@ -174,12 +194,14 @@ impl ApiServer for ApiService {
         &self,
         request: Request<UpdatePodStatusRequest>,
     ) -> Result<Response<UpdatePodStatusResponse>, Status> {
+        require_role(&request, Role::Node)?;
         crate::telemetry::traced("update_pod_status", self.update_pod_status_impl(request)).await
     }
     async fn update_node_status(
         &self,
         request: Request<UpdateNodeStatusRequest>,
     ) -> Result<Response<UpdateNodeStatusResponse>, Status> {
+        require_role(&request, Role::Node)?;
         crate::telemetry::traced("update_node_status", self.update_node_status_impl(request)).await
     }
     type WatchDesiredStateStream = DesiredStateEventStream;
@@ -187,6 +209,7 @@ impl ApiServer for ApiService {
         &self,
         request: Request<WatchDesiredStateRequest>,
     ) -> Result<Response<Self::WatchDesiredStateStream>, Status> {
+        require_role(&request, Role::Node)?;
         crate::telemetry::traced(
             "watch_desired_state",
             self.watch_desired_state_impl(request),
