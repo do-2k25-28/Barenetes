@@ -15,6 +15,9 @@ impl ApiService {
         &self,
         request: Request<UpdatePodStatusRequest>,
     ) -> Result<Response<UpdatePodStatusResponse>, Status> {
+        // Captured before `into_inner()` consumes the request, which also owns the
+        // extensions the mTLS peer certificate is attached to.
+        let peer = crate::tls_identity::peer(&request);
         let UpdatePodStatusRequest {
             pod,
             container_statuses,
@@ -44,6 +47,19 @@ impl ApiService {
             )));
         }
         let reported_pod = reported.pod.unwrap();
+
+        // A node-role cert only proves the caller is *some* node, not that it's the one
+        // this pod is actually assigned to -- without this, node-a's cert could report
+        // status for a pod running on node-b. Fetched separately from the mutation below
+        // since the pod's current owner has to be known before the mutate closure (which
+        // has no way to fail) is allowed to run.
+        let existing = self
+            .store
+            .get_pod(&spec.namespace, &reported_pod.name)
+            .await
+            .map_err(|e| e.to_status())?
+            .ok_or_else(|| crate::errors::pod_not_found(&spec.namespace, &reported_pod.name))?;
+        crate::tls_identity::check_identity(&peer, &existing.node_name)?;
 
         let found = self
             .store

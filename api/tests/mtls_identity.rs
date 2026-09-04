@@ -8,10 +8,10 @@ use std::sync::Arc;
 
 use api::service::ApiService;
 use api::store::Store;
-use proto::api::v1::UpdateNodeStatusRequest;
 use proto::api::v1::api_server_client::ApiServerClient;
 use proto::api::v1::api_server_server::ApiServerServer;
-use proto::shared::v1::{Node, NodeStatus};
+use proto::api::v1::{UpdateNodeStatusRequest, UpdatePodStatusRequest};
+use proto::shared::v1::{Node, NodeStatus, Pod, PodDetail, PodSpec, PodStatus, PodWithSpec};
 use proto::tls::{load_client_tls_config, load_server_tls_config};
 use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, Issuer, KeyPair,
@@ -144,6 +144,51 @@ fn update_node_status_request(node_name: &str) -> UpdateNodeStatusRequest {
     }
 }
 
+/// A pod assigned to `node_name`, as `AssignPod` would leave it.
+fn assigned_pod(namespace: &str, name: &str, node_name: &str) -> PodDetail {
+    PodDetail {
+        core: Some(PodWithSpec {
+            pod: Some(Pod {
+                name: name.to_string(),
+                status: PodStatus::Pending as i32,
+                requests: None,
+                limits: None,
+            }),
+            spec: Some(PodSpec {
+                namespace: namespace.to_string(),
+                containers: vec![],
+            }),
+        }),
+        container_statuses: vec![],
+        pod_ip: None,
+        message: None,
+        resource_usage: None,
+        node_name: node_name.to_string(),
+        unschedulable_reason: None,
+    }
+}
+
+fn update_pod_status_request(namespace: &str, name: &str) -> UpdatePodStatusRequest {
+    UpdatePodStatusRequest {
+        pod: Some(PodWithSpec {
+            pod: Some(Pod {
+                name: name.to_string(),
+                status: PodStatus::Running as i32,
+                requests: None,
+                limits: None,
+            }),
+            spec: Some(PodSpec {
+                namespace: namespace.to_string(),
+                containers: vec![],
+            }),
+        }),
+        container_statuses: vec![],
+        pod_ip: None,
+        message: None,
+        resource_usage: None,
+    }
+}
+
 #[tokio::test]
 async fn matching_client_cert_and_node_name_is_accepted() {
     let (ca_pem, ca_key_pem) = make_ca();
@@ -174,6 +219,50 @@ async fn mismatched_node_name_is_rejected_as_impersonation() {
         .update_node_status(update_node_status_request("node-b"))
         .await
         .expect_err("a node_name that doesn't match the client cert must be rejected");
+
+    assert_eq!(status.code(), Code::PermissionDenied);
+}
+
+#[tokio::test]
+async fn node_cert_can_update_status_of_its_own_pod() {
+    let (ca_pem, ca_key_pem) = make_ca();
+    let server_cert = issue(&ca_pem, &ca_key_pem, "test-server", None);
+    let client_cert = issue(&ca_pem, &ca_key_pem, "node-a", Some("node"));
+
+    let store = Arc::new(Store::new());
+    store
+        .upsert_pod(assigned_pod("default", "web", "node-a"))
+        .await
+        .unwrap();
+    let (addr, _server) = start_mtls_server(store, &server_cert, &ca_pem).await;
+    let mut client = mtls_client(addr, &client_cert, &ca_pem, "test-server").await;
+
+    let response = client
+        .update_pod_status(update_pod_status_request("default", "web"))
+        .await;
+
+    assert!(response.is_ok(), "{:?}", response.err());
+}
+
+#[tokio::test]
+async fn node_cert_cannot_update_status_of_another_nodes_pod() {
+    let (ca_pem, ca_key_pem) = make_ca();
+    let server_cert = issue(&ca_pem, &ca_key_pem, "test-server", None);
+    // node-a's cert tries to report status for a pod actually assigned to node-b.
+    let client_cert = issue(&ca_pem, &ca_key_pem, "node-a", Some("node"));
+
+    let store = Arc::new(Store::new());
+    store
+        .upsert_pod(assigned_pod("default", "web", "node-b"))
+        .await
+        .unwrap();
+    let (addr, _server) = start_mtls_server(store, &server_cert, &ca_pem).await;
+    let mut client = mtls_client(addr, &client_cert, &ca_pem, "test-server").await;
+
+    let status = client
+        .update_pod_status(update_pod_status_request("default", "web"))
+        .await
+        .expect_err("a node must not be able to update another node's pod status");
 
     assert_eq!(status.code(), Code::PermissionDenied);
 }
