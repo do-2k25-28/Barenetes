@@ -6,17 +6,16 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# Root is required: the daemon manages Linux bridges, VLANs, a VXLAN
-# overlay, and firewall/NAT rules directly via `ip`/`bridge`/iptables.
+# Root is required: the daemon manages Linux bridges, VLANs, routes and
+# firewall/NAT rules directly via `ip`/`bridge`/iptables.
 User=root
 ExecStart=/usr/local/bin/barenetes-cni
 WorkingDirectory=/usr/local/bin
 
 # Written by deploy/install.sh. BARENETES_NODE_ID defaults to 0 for
-# single-node setups. Multi-node VXLAN overlay requires setting it
-# (0-255, unique per node) along with BARENETES_NODE_IP and
-# BARENETES_REMOTE_NODE_IPS -- see deploy/install.sh --node-id/--node-ip/
-# --remote-node-ips.
+# single-node setups. Multi-node routing requires a unique node id and
+# BARENETES_REMOTE_NODES values -- see deploy/install.sh
+# --node-id/--remote-nodes.
 EnvironmentFile=-/etc/barenetes/cni.env
 
 # cni::run() installs a SIGINT handler to remove the unix socket on

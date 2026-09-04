@@ -94,6 +94,6 @@ fn status_from_io(error: io::Error) -> Status {
     match error.kind() {
         io::ErrorKind::InvalidInput => Status::invalid_argument(error.to_string()),
         io::ErrorKind::NotFound => Status::not_found(error.to_string()),
-        _ => Status::internal("workload network operation failed"),
+        _ => Status::internal(format!("workload network operation failed: {error}")),
     }
 }

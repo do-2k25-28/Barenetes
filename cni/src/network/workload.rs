@@ -7,6 +7,7 @@ use std::os::unix::io::AsRawFd;
 use super::bridge;
 use super::system::{self, mtu, run, succeeds};
 
+use crate::addressing;
 use crate::state::{StateStore, WorkloadRecord, stable_id};
 use proto::cni::v1::{
     AddWorkloadNetworkRequest, DeleteWorkloadNetworkRequest, GetWorkloadNetworkRequest, NetworkRef,
@@ -38,7 +39,6 @@ pub(crate) fn add_workload_network(
 ) -> io::Result<WorkloadNetwork> {
     let (workload, network, pid, interface) = validate_add_request(&request)?;
     let netns = open_netns(&request.netns_path)?;
-    super::firewall::validate_mappings(&request.port_mappings)?;
     if let Some(record) = state.load(
         &workload.workload_name,
         &workload.instance_name,
@@ -55,7 +55,7 @@ pub(crate) fn add_workload_network(
         }
         if !succeeds(IP, &["link", "show", "dev", &record.host_interface])? {
             // Reconcile a durable record whose kernel interface disappeared.
-            super::firewall::delete_mappings(&record.ip_address, &record.port_mappings)?;
+            super::port_forward::delete_mappings(&record.ip_address, &record.port_mappings)?;
             release_record_ip(pools, &record)?;
             state.delete(
                 &workload.workload_name,
@@ -63,7 +63,7 @@ pub(crate) fn add_workload_network(
                 &network.network_name,
             )?;
         } else {
-            super::firewall::add_mappings(&record.ip_address, &record.port_mappings)?;
+            super::port_forward::add_mappings(&record.ip_address, &record.port_mappings)?;
             return Ok(record_to_network(&record));
         }
     }
@@ -77,7 +77,7 @@ pub(crate) fn add_workload_network(
     }
 
     let node = super::node_id()?;
-    let gateway = super::vlan::ensure(network.vlan_id as u8, node)?;
+    let gateway = addressing::gateway(network.vlan_id as u8, node);
     let gateway_string = gateway.to_string();
     let pool = pools.pool(network.vlan_id)?;
     let address = pool.allocate()?;
@@ -87,7 +87,7 @@ pub(crate) fn add_workload_network(
         &network.network_name,
     );
     let peer_interface = format!("p{}", &host_interface[1..]);
-    let address_with_prefix = format!("{address}/16");
+    let address_with_prefix = format!("{address}/24");
     let pid_string = pid.to_string();
     let interface_mtu = mtu()?.to_string();
 
@@ -164,7 +164,9 @@ pub(crate) fn add_workload_network(
                 "untagged",
             ],
         )?;
-        run(IP, &["link", "set", "dev", &host_interface, "up"])
+        run(IP, &["link", "set", "dev", &host_interface, "up"])?;
+        super::vlan::ensure(network.vlan_id as u8, node)?;
+        Ok(())
     })();
 
     if let Err(error) = setup {
@@ -184,13 +186,14 @@ pub(crate) fn add_workload_network(
         vlan_id: network.vlan_id,
         port_mappings: request.port_mappings.clone(),
     };
-    if let Err(error) = super::firewall::add_mappings(&record.ip_address, &record.port_mappings) {
+    if let Err(error) = super::port_forward::add_mappings(&record.ip_address, &record.port_mappings)
+    {
         let _ = run(IP, &["link", "delete", &record.host_interface]);
         let _ = pool.release(address);
         return Err(error);
     }
     if let Err(error) = state.save(&record) {
-        let _ = super::firewall::delete_mappings(&record.ip_address, &record.port_mappings);
+        let _ = super::port_forward::delete_mappings(&record.ip_address, &record.port_mappings);
         let _ = run(IP, &["link", "delete", &record.host_interface]);
         let _ = pool.release(address);
         return Err(error);
@@ -236,7 +239,7 @@ pub(crate) fn delete_workload_network(
     if succeeds(IP, &["link", "show", "dev", &record.host_interface])? {
         run(IP, &["link", "delete", &record.host_interface])?;
     }
-    super::firewall::delete_mappings(&record.ip_address, &record.port_mappings)?;
+    super::port_forward::delete_mappings(&record.ip_address, &record.port_mappings)?;
     // Keep the record if IPAM release fails so a retry can recover it.
     release_record_ip(pools, &record)?;
     state.delete(
@@ -257,10 +260,6 @@ fn release_record_ip(pools: &IpPoolDirectory, record: &WorkloadRecord) -> io::Re
         .and_then(|pool| pool.release(address))
     {
         Ok(_) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::InvalidInput => {
-            eprintln!("cni: skipping IPAM release for legacy record {address}: {error}");
-            Ok(())
-        }
         Err(error) => Err(error),
     }
 }
@@ -268,21 +267,7 @@ fn release_record_ip(pools: &IpPoolDirectory, record: &WorkloadRecord) -> io::Re
 fn validate_add_request(
     request: &AddWorkloadNetworkRequest,
 ) -> io::Result<(&WorkloadRef, &NetworkRef, u32, &str)> {
-    let workload = request
-        .workload
-        .as_ref()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "workload is required"))?;
-    let network = request
-        .network
-        .as_ref()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "network is required"))?;
-    for value in [
-        &workload.workload_name,
-        &workload.instance_name,
-        &network.network_name,
-    ] {
-        validate_name(value)?;
-    }
+    let (workload, network) = validate_refs(request.workload.as_ref(), request.network.as_ref())?;
     if !(1..=255).contains(&network.vlan_id) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,

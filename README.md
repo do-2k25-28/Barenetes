@@ -131,7 +131,7 @@ sudo ./deploy/install.sh --role all             # single-node setup
 ```
 
 See [`deploy/README.md`](deploy/README.md) for options (etcd, multi-node CNI
-overlay, etc.) and current limitations.
+routing, etc.) and current limitations.
 
 ---
 

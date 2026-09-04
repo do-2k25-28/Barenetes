@@ -93,8 +93,7 @@ start_node() {
 
     nsenter -t "$pid" -n env \
         BARENETES_NODE_ID="$node_id" \
-        BARENETES_NODE_IP="$node_ip" \
-        BARENETES_REMOTE_NODE_IPS="$remote_ip" \
+        BARENETES_REMOTE_NODES="$([[ "$node_id" == 1 ]] && echo "2@$remote_ip" || echo "1@$remote_ip")" \
         BARENETES_CNI_SOCKET="$socket" \
         BARENETES_CNI_STATE_DIR="$state" \
         BARENETES_CNI_IP_POOL_DIR="$TMP_DIR/pool-node-${node_id}" \
@@ -130,8 +129,7 @@ restart_node_daemon() {
 
     nsenter -t "$pid" -n env \
         BARENETES_NODE_ID="$node_id" \
-        BARENETES_NODE_IP="$node_ip" \
-        BARENETES_REMOTE_NODE_IPS="$remote_ip" \
+        BARENETES_REMOTE_NODES="$([[ "$node_id" == 1 ]] && echo "2@$remote_ip" || echo "1@$remote_ip")" \
         BARENETES_CNI_SOCKET="$socket" \
         BARENETES_CNI_STATE_DIR="$state" \
         BARENETES_CNI_IP_POOL_DIR="$TMP_DIR/pool-node-${node_id}" \
@@ -172,7 +170,7 @@ echo "[1/5] un nœud avec un workload"
 start_node 1 192.0.2.1 192.0.2.2
 start_workload; W1=$LAST_NETNS_PID
 add_workload 1 single-a tenant-single 100 "$W1"
-nsenter -t "$W1" -n ip -4 addr show dev eth0 | grep -q '10.100.1.2/16' || fail "IP du workload unique absente"
+nsenter -t "$W1" -n ip -4 addr show dev eth0 | grep -q '10.100.1.2/24' || fail "IP du workload unique absente"
 assert_ping "$W1" 10.100.1.1 "gateway inaccessible"
 delete_workload 1 single-a tenant-single 100
 
@@ -192,8 +190,12 @@ start_workload; W4=$LAST_NETNS_PID
 start_workload; W5=$LAST_NETNS_PID
 add_workload 1 multi-a tenant-multi-one 102 "$W4"
 add_workload 2 multi-b tenant-multi-one 102 "$W5"
-assert_ping "$W4" 10.102.2.2 "VXLAN nœud 1 → nœud 2 échoué"
-assert_ping "$W5" 10.102.1.2 "VXLAN nœud 2 → nœud 1 échoué"
+nsenter -t "${NODE_NETNS_PIDS[1]}" -n ip route show 10.102.2.0/24 \
+    | grep -q 'via 192.0.2.2' || fail "route vers le nœud 2 absente"
+nsenter -t "${NODE_NETNS_PIDS[2]}" -n ip route show 10.102.1.0/24 \
+    | grep -q 'via 192.0.2.1' || fail "route vers le nœud 1 absente"
+assert_ping "$W4" 10.102.2.2 "routage nœud 1 → nœud 2 échoué"
+assert_ping "$W5" 10.102.1.2 "routage nœud 2 → nœud 1 échoué"
 delete_workload 1 multi-a tenant-multi-one 102
 delete_workload 2 multi-b tenant-multi-one 102
 
@@ -206,10 +208,12 @@ add_workload 1 multi-a-1 tenant-multi-many 103 "$W6"
 add_workload 1 multi-a-2 tenant-multi-many 103 "$W7"
 add_workload 2 multi-b-1 tenant-multi-many 103 "$W8"
 add_workload 2 multi-b-2 tenant-multi-many 103 "$W9"
+nsenter -t "${NODE_NETNS_PIDS[1]}" -n ip route show 10.103.2.0/24 \
+    | grep -q 'via 192.0.2.2' || fail "route multi-workloads vers le nœud 2 absente"
 assert_ping "$W6" 10.103.1.3 "communication locale nœud 1 échouée"
-assert_ping "$W6" 10.103.2.2 "communication VXLAN nœud 1 → nœud 2 échouée"
-assert_ping "$W7" 10.103.2.3 "communication VXLAN nœud 1 → nœud 2 échouée"
-assert_ping "$W8" 10.103.1.2 "communication VXLAN nœud 2 → nœud 1 échouée"
+assert_ping "$W6" 10.103.2.2 "communication routée nœud 1 → nœud 2 échouée"
+assert_ping "$W7" 10.103.2.3 "communication routée nœud 1 → nœud 2 échouée"
+assert_ping "$W8" 10.103.1.2 "communication routée nœud 2 → nœud 1 échouée"
 delete_workload 1 multi-a-1 tenant-multi-many 103
 delete_workload 1 multi-a-2 tenant-multi-many 103
 delete_workload 2 multi-b-1 tenant-multi-many 103
