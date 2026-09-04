@@ -88,19 +88,21 @@ there's no port clash. Still requires containerd (see above).
 ## Installing the barectl CLI
 
 `install.sh` doesn't install `barectl` (it's a client, not a service). Each
-release publishes it as a `.deb` and a `.rpm` alongside the raw binaries, so
-on any machine that talks to a control plane:
+release publishes it as a `.deb`, a `.rpm`, and a pacman `.pkg.tar.zst`
+alongside the raw binaries, so on any machine that talks to a control plane:
 
 ```sh
 # Debian / Ubuntu / Mint / Pop!_OS
 sudo apt install ./barenetes-barectl_*.deb
 # Fedora / RHEL / Rocky / AlmaLinux / openSUSE
 sudo dnf install ./barenetes-barectl-*.rpm
+# Arch / Manjaro / EndeavourOS
+sudo pacman -U ./barenetes-barectl-*.pkg.tar.zst
 ```
 
-Both install `/usr/bin/barectl`. On distros without a supported package
-format (Alpine, Arch, ...), grab the raw `barenetes-barectl-linux-x86_64`
-asset and put it on your `PATH` (e.g. `install -m 0755
+All three install `/usr/bin/barectl`. On distros without a supported package
+format (Alpine, ...), grab the raw `barenetes-barectl-linux-x86_64` asset and
+put it on your `PATH` (e.g. `install -m 0755
 barenetes-barectl-linux-x86_64 /usr/local/bin/barectl`).
 
 ## Options

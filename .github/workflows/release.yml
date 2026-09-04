@@ -2,8 +2,9 @@ name: Release
 
 # Builds all workspace binaries in release mode and publishes them as assets
 # on a GitHub Release, so deploy/install.sh can fetch them with a plain curl.
-# The barectl CLI is additionally published as a .deb and a .rpm, so it can
-# be installed directly on Debian/Ubuntu and Fedora/RHEL-family distros.
+# The barectl CLI is additionally published as a .deb, a .rpm, and a pacman
+# .pkg.tar.zst, so it can be installed directly on Debian/Ubuntu,
+# Fedora/RHEL-family, and Arch-family distros.
 #
 # Triggered by pushing a version tag (v1.2.3), or manually for a re-run.
 on:
@@ -132,6 +133,64 @@ jobs:
 
           rpmbuild --bb --define "_topdir ${RPMBUILD_TOPDIR}" "${RPMBUILD_TOPDIR}/specs/${PKG}.spec"
           install -m 0644 "${RPMBUILD_TOPDIR}/RPMS/${ARCH}/${PKG}-${VERSION}-1.${ARCH}.rpm" "dist/${PKG}-${VERSION}-1.${ARCH}.rpm"
+
+      - name: Package barectl as pacman .pkg.tar.zst
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)"
+          PKG="barenetes-barectl"
+          ARCH="x86_64"
+
+          ROOT="pkg/${PKG}-${VERSION}-1-${ARCH}"
+          mkdir -p "${ROOT}/usr/bin"
+          install -m 0755 target/release/barectl "${ROOT}/usr/bin/barectl"
+
+          # .PKGINFO's size field is the final compressed package size, which
+          # isn't known until after a build -- so build with a placeholder,
+          # measure, and rebuild until the recorded size matches the actual
+          # one (the digit count of the size affects the compressed size).
+          write_pkginfo() {
+            cat > "${ROOT}/.PKGINFO" <<EOF
+          pkgname = ${PKG}
+          pkgver = ${VERSION}
+          pkgdesc = Barenetes CLI (kubectl-style client for the Barenetes API server)
+          arch = ${ARCH}
+          url = https://github.com/do-2k25-28/Barenetes
+          builddate = $(date +%s)
+          size = $1
+          packager = do-2k25-28 <do-2k25-28@users.noreply.github.com>
+          EOF
+          }
+          cat > "${ROOT}/.BUILDINFO" <<EOF
+          format = 2
+          pkgname = ${PKG}
+          pkgbase = ${PKG}
+          pkgver = ${VERSION}
+          pkgarch = ${ARCH}
+          pkgbuildtime = $(date +%s)
+          buildhost = $(hostname)
+          EOF
+
+          PKGFILE="dist/${PKG}-${VERSION}-1-${ARCH}.pkg.tar.zst"
+          build_pkg() {
+            rm -f "${PKGFILE}"
+            tar --sort=name --owner=0 --group=0 --numeric-owner -C "${ROOT}" -cf - . \
+              | zstd -q -T0 -o "${PKGFILE}"
+          }
+          recorded_size() {
+            grep -m1 '^size = ' "${ROOT}/.PKGINFO" | awk '{print $3}'
+          }
+
+          write_pkginfo 0
+          build_pkg
+          for _ in 1 2 3 4 5; do
+            SIZE="$(stat -c%s "${PKGFILE}")"
+            [[ "$SIZE" -eq "$(recorded_size)" ]] && break
+            write_pkginfo "${SIZE}"
+            build_pkg
+          done
+          [[ "$(stat -c%s "${PKGFILE}")" -eq "$(recorded_size)" ]] \
+            || { echo "::error::pkg size field did not converge" >&2; exit 1; }
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
