@@ -11,6 +11,7 @@ enum PodStatus {
   SUCCEEDED = 2;
   FAILED = 3;
   UNKNOWN = 4;
+  NO_NODE_AVAILABLE = 5;
 }
 
 // Basic Pod for scheduling

@@ -3,7 +3,7 @@ use proto::api::v1::{
     AssignPodRequest, AssignPodResponse, WatchDesiredStateEvent, WatchNodeEvent, WatchNodesRequest,
     WatchPodEvent, WatchPodsRequest, assign_pod_request, watch_desired_state_event,
 };
-use proto::shared::v1::EventType;
+use proto::shared::v1::{EventType, PodStatus};
 use tokio_stream::StreamExt;
 use tonic::{Request, Response, Status};
 
@@ -73,6 +73,11 @@ impl ApiService {
                     .update_and_publish_pod(&namespace, &name, EventType::Scheduled, |detail| {
                         detail.node_name = node_name.clone();
                         detail.unschedulable_reason = None;
+                        if let Some(core_pod) =
+                            detail.core.as_mut().and_then(|core| core.pod.as_mut())
+                        {
+                            core_pod.status = PodStatus::Pending as i32;
+                        }
                         placed = detail.core.clone();
                     })
                     .await
@@ -92,11 +97,38 @@ impl ApiService {
                     .await;
             }
             assign_pod_request::Outcome::UnschedulableReason(reason) => {
-                // Status stays PENDING: lack of fit is retriable, not a terminal phase.
+                // NO_NODE_AVAILABLE is retriable, not terminal: the scheduler retries
+                // this pod on every later node event via its `pending` set.
                 let found = self
                     .store
                     .update_and_publish_pod(&namespace, &name, EventType::Modified, |detail| {
                         detail.unschedulable_reason = Some(reason);
+                        if let Some(core_pod) =
+                            detail.core.as_mut().and_then(|core| core.pod.as_mut())
+                        {
+                            core_pod.status = PodStatus::NoNodeAvailable as i32;
+                        }
+                    })
+                    .await
+                    .map_err(|e| e.to_status())?;
+                if !found {
+                    return Err(crate::errors::pod_not_found(&namespace, &name));
+                }
+            }
+            assign_pod_request::Outcome::OrphanedReason(reason) => {
+                // The pod's node went NotReady: nothing vouches for it running there
+                // anymore, so drop the stale node assignment instead of leaving the
+                // dead node's last-reported status in place.
+                let found = self
+                    .store
+                    .update_and_publish_pod(&namespace, &name, EventType::Modified, |detail| {
+                        detail.node_name = String::new();
+                        detail.unschedulable_reason = Some(reason);
+                        if let Some(core_pod) =
+                            detail.core.as_mut().and_then(|core| core.pod.as_mut())
+                        {
+                            core_pod.status = PodStatus::Unknown as i32;
+                        }
                     })
                     .await
                     .map_err(|e| e.to_status())?;
@@ -139,6 +171,12 @@ mod tests {
 
     fn unschedulable(reason: &str) -> Option<assign_pod_request::Outcome> {
         Some(assign_pod_request::Outcome::UnschedulableReason(
+            reason.to_string(),
+        ))
+    }
+
+    fn orphaned(reason: &str) -> Option<assign_pod_request::Outcome> {
+        Some(assign_pod_request::Outcome::OrphanedReason(
             reason.to_string(),
         ))
     }
@@ -367,6 +405,10 @@ mod tests {
             Some("no node with enough memory")
         );
         assert_eq!(stored.node_name, "", "an unplaced pod keeps no node");
+        assert_eq!(
+            stored.core.unwrap().pod.unwrap().status,
+            PodStatus::NoNodeAvailable as i32
+        );
 
         let pod_event = pod_events
             .try_recv()
@@ -394,6 +436,75 @@ mod tests {
             .unwrap();
         assert_eq!(stored.unschedulable_reason, None);
         assert_eq!(stored.node_name, "node-a");
+    }
+
+    #[tokio::test]
+    async fn test_assign_pod_placement_resets_unknown_status_to_pending() {
+        let service = test_support::service();
+        let mut pod = test_support::pod_detail("default", "my-pod");
+        if let Some(core_pod) = pod.core.as_mut().and_then(|core| core.pod.as_mut()) {
+            core_pod.status = PodStatus::Unknown as i32;
+        }
+        service.store.upsert_pod(pod).await.unwrap();
+
+        service
+            .assign_pod_impl(assign_request("default", "my-pod", placed_on("node-a")))
+            .await
+            .unwrap();
+
+        let stored = service
+            .store
+            .get_pod("default", "my-pod")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.node_name, "node-a");
+        assert_eq!(
+            stored.core.unwrap().pod.unwrap().status,
+            PodStatus::Pending as i32
+        );
+    }
+
+    #[tokio::test]
+    async fn test_assign_pod_orphaned_clears_node_and_sets_unknown() {
+        let service = test_support::service();
+        let mut pod = test_support::pod_detail("default", "my-pod");
+        pod.node_name = "node-a".to_string();
+        if let Some(core_pod) = pod.core.as_mut().and_then(|core| core.pod.as_mut()) {
+            core_pod.status = PodStatus::Running as i32;
+        }
+        service.store.upsert_pod(pod).await.unwrap();
+        let mut pod_events = service.store.subscribe_pod_events();
+
+        service
+            .assign_pod_impl(assign_request(
+                "default",
+                "my-pod",
+                orphaned("node node-a became NotReady"),
+            ))
+            .await
+            .expect("an orphaned outcome should still be accepted");
+
+        let stored = service
+            .store
+            .get_pod("default", "my-pod")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.node_name, "", "an orphaned pod keeps no node");
+        assert_eq!(
+            stored.unschedulable_reason.as_deref(),
+            Some("node node-a became NotReady")
+        );
+        assert_eq!(
+            stored.core.unwrap().pod.unwrap().status,
+            PodStatus::Unknown as i32
+        );
+
+        let pod_event = pod_events
+            .try_recv()
+            .expect("a pod event should be published");
+        assert_eq!(pod_event.event_type, EventType::Modified as i32);
     }
 
     #[tokio::test]
