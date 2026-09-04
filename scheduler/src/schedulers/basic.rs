@@ -51,14 +51,17 @@ impl BasicScheduler {
         self.placements.insert(key, (node_name.to_string(), limits));
     }
 
-    pub fn release_placement(&mut self, namespace: &str, name: &str) {
+    /// Returns whether a placement actually existed and was released.
+    pub fn release_placement(&mut self, namespace: &str, name: &str) -> bool {
         let key = (namespace.to_string(), name.to_string());
-        if let Some((node_name, limits)) = self.placements.remove(&key)
-            && let Some(claimed) = self.claimed.get_mut(&node_name)
-        {
+        let Some((node_name, limits)) = self.placements.remove(&key) else {
+            return false;
+        };
+        if let Some(claimed) = self.claimed.get_mut(&node_name) {
             claimed.cpu -= limits.cpu;
             claimed.memory -= limits.memory;
         }
+        true
     }
 
     fn effective_allocatable(&self, node: &Node) -> Option<Resources> {
@@ -214,8 +217,8 @@ mod tests {
         let mut scheduler = BasicScheduler::default();
 
         scheduler.record_placement("default", "web", "n", limits(300, 200));
-        scheduler.release_placement("default", "web");
 
+        assert!(scheduler.release_placement("default", "web"));
         assert_eq!(
             scheduler.effective_allocatable(&node),
             Some(limits(1000, 1000))
@@ -227,8 +230,7 @@ mod tests {
         let node = get_node("n", limits(1000, 1000), limits(1000, 1000));
         let mut scheduler = BasicScheduler::default();
 
-        scheduler.release_placement("default", "never-placed");
-
+        assert!(!scheduler.release_placement("default", "never-placed"));
         assert_eq!(
             scheduler.effective_allocatable(&node),
             Some(limits(1000, 1000))

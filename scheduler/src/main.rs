@@ -29,8 +29,9 @@ struct Cli {
 type PodKey = (String, String);
 
 /// Pods the scheduler has seen and couldn't place yet. Kept around so a
-/// capacity-relevant node event can retry them without waiting for the pod
-/// itself to change.
+/// capacity-relevant event — a node event, or another pod being deleted and
+/// freeing its claimed resources — can retry them without waiting for the
+/// pod itself to change.
 #[derive(Default)]
 struct SchedulerState {
     scheduler: BasicScheduler,
@@ -70,7 +71,8 @@ where
 /// Keeps the scheduler's node view current and retries any pod that
 /// couldn't be placed before, since a node change (added, more allocatable
 /// capacity, recovered from NOT_READY) is exactly what makes a pending pod
-/// schedulable again.
+/// schedulable again. A pod deletion that frees a placement triggers the
+/// same retry from `watch_pods`.
 async fn watch_nodes(
     mut client: ApiServerClient<Channel>,
     state: Arc<Mutex<SchedulerState>>,
@@ -110,7 +112,7 @@ async fn retry_pending(
     };
 
     for ((namespace, name), pod) in retry {
-        try_schedule(client, state, &namespace, &name, &pod).await?;
+        try_schedule(client, state, &namespace, &name, &pod, true).await?;
     }
 
     Ok(())
@@ -145,10 +147,15 @@ async fn watch_pods(
         if event_type == EventType::Deleted {
             let mut guard = state.lock().await;
             guard.pending.remove(&key);
-            guard.scheduler.release_placement(&namespace, &pod.name);
+            let released = guard.scheduler.release_placement(&namespace, &pod.name);
             drop(guard);
 
-            retry_pending(&mut client, &state).await?;
+            // Only a released placement frees capacity that could unblock a
+            // pending pod; a deleted pod that was itself pending changes
+            // nothing worth retrying for.
+            if released {
+                retry_pending(&mut client, &state).await?;
+            }
             continue;
         }
 
@@ -167,13 +174,15 @@ async fn watch_pods(
         // Only a brand-new pod triggers scheduling here. AssignPod's
         // unschedulable-reason path itself publishes a Modified event with
         // node_name still empty, so reacting to Modified here would make the
-        // scheduler retry-loop against its own writes forever; retries for
-        // already-pending pods happen from watch_nodes instead.
+        // scheduler retry-loop against its own writes forever; already-pending
+        // pods are retried from watch_nodes on node events, and from this
+        // function's own Deleted branch above when a pod deletion frees a
+        // placement.
         if event_type != EventType::Added {
             continue;
         }
 
-        try_schedule(&mut client, &state, &namespace, &pod.name, &pod).await?;
+        try_schedule(&mut client, &state, &namespace, &pod.name, &pod, false).await?;
     }
 
     Ok(())
@@ -182,17 +191,33 @@ async fn watch_pods(
 /// Runs placement against the current node view, reports the outcome back
 /// to the API server via `AssignPod`, and keeps `pending` in sync so a
 /// later node event can retry an unschedulable pod.
+///
+/// `only_if_pending` must be `true` for calls driven by a `pending` snapshot
+/// (i.e. from `retry_pending`): two retry sweeps can run concurrently (one
+/// from `watch_nodes`, one from `watch_pods`'s Deleted branch), and without
+/// re-checking that the key is still pending once the lock is held, a sweep
+/// working off a stale snapshot can re-place a pod another sweep already
+/// resolved — placing it on a second node while the first is never told to
+/// stop. It must be `false` for a brand-new `Added` pod, which isn't in
+/// `pending` yet.
 async fn try_schedule(
     client: &mut ApiServerClient<Channel>,
     state: &Arc<Mutex<SchedulerState>>,
     namespace: &str,
     name: &str,
     pod: &Pod,
+    only_if_pending: bool,
 ) -> Result<()> {
     let key = (namespace.to_string(), name.to_string());
 
     let outcome = {
         let mut guard = state.lock().await;
+        if only_if_pending && !guard.pending.contains_key(&key) {
+            // Already resolved by a concurrent retry sweep (placed, or
+            // dropped because the pod was deleted) since this call's
+            // snapshot was taken.
+            return Ok(());
+        }
         let outcome = guard.scheduler.place(pod);
         match &outcome {
             Ok(node_name) => {
