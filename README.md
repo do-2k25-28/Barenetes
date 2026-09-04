@@ -68,7 +68,7 @@ Barenetes is a Cargo workspace composed of six crates, each mirroring a real Kub
 | ------------------------- | -------------- | ---------------------------------------------------- |
 | `agent`                   | kubelet        | Runs on each node, manages container lifecycle       |
 | `api`                     | kube-apiserver | Central hub : accepts requests and coordinates state |
-| `barectl`                 | kubectl        | CLI to interact with the API server                  |
+| [`barectl`](barectl/README.md) | kubectl        | CLI to interact with the API server                  |
 | `scheduler/reconciliator` | kube-scheduler | Assigns workloads to nodes                           |
 | `cni`                     | CNI plugin     | Manages pod networking                               |
 | `pki`                     | -              | Bootstraps the cluster's private mTLS CA and certs   |
@@ -135,7 +135,8 @@ sudo ./deploy/install.sh --role all --node-name <name>                # single-n
 
 The `barectl` CLI is also published as a `.deb`, a `.rpm`, and a pacman
 `.pkg.tar.zst` on each release, so it can be installed directly on
-Debian/Ubuntu, Fedora/RHEL-family, and Arch-family distros:
+Debian/Ubuntu, Fedora/RHEL-family, and Arch-family distros. These packages
+include shell completions for Bash, Zsh, and Fish:
 
 ```sh
 # Debian / Ubuntu
