@@ -29,6 +29,7 @@ impl BasicScheduler {
     pub fn remove_node(&mut self, name: &str) {
         self.nodes.remove(name);
         self.claimed.remove(name);
+        self.placements.retain(|_, (node, _)| node != name);
     }
 
     pub fn record_placement(
@@ -62,6 +63,25 @@ impl BasicScheduler {
             claimed.memory -= limits.memory;
         }
         true
+    }
+
+    /// Releases every placement recorded against `node_name` — meant to be
+    /// called once that node is reported `NOT_READY`, before the caller retries
+    /// placement for each returned pod on a different node. Returns
+    /// `(namespace, name, limits)` for every pod that was evicted.
+    pub fn evict_node(&mut self, node_name: &str) -> Vec<(String, String, Resources)> {
+        let evicted: Vec<(String, String, Resources)> = self
+            .placements
+            .iter()
+            .filter(|(_, (node, _))| node == node_name)
+            .map(|((namespace, name), (_, limits))| (namespace.clone(), name.clone(), *limits))
+            .collect();
+
+        for (namespace, name, _) in &evicted {
+            self.release_placement(namespace, name);
+        }
+
+        evicted
     }
 
     fn effective_allocatable(&self, node: &Node) -> Option<Resources> {
@@ -254,5 +274,58 @@ mod tests {
             .unwrap();
 
         assert_eq!(placed, "empty");
+    }
+
+    #[test]
+    fn evict_node_releases_claims_and_returns_evicted_pods() {
+        let mut scheduler = BasicScheduler::default();
+        scheduler.upsert_node(get_node("dead", limits(1000, 1000), limits(1000, 1000)));
+        scheduler.record_placement("default", "web", "dead", limits(300, 200));
+        scheduler.record_placement("ns2", "other", "dead", limits(100, 100));
+        scheduler.record_placement("default", "elsewhere", "alive", limits(50, 50));
+
+        let evicted = scheduler.evict_node("dead");
+
+        assert_eq!(evicted.len(), 2);
+        assert!(
+            evicted.contains(&("default".to_string(), "web".to_string(), limits(300, 200)))
+        );
+        assert!(
+            evicted.contains(&("ns2".to_string(), "other".to_string(), limits(100, 100)))
+        );
+
+        let dead = get_node("dead", limits(1000, 1000), limits(1000, 1000));
+        assert_eq!(
+            scheduler.effective_allocatable(&dead),
+            Some(limits(1000, 1000)),
+            "claims on the evicted node must be released"
+        );
+        // The unrelated placement on "alive" must survive the eviction.
+        assert!(scheduler.release_placement("default", "elsewhere"));
+    }
+
+    #[test]
+    fn evict_node_with_no_placements_returns_empty() {
+        let mut scheduler = BasicScheduler::default();
+        scheduler.upsert_node(get_node("solo", limits(1000, 1000), limits(1000, 1000)));
+
+        assert_eq!(scheduler.evict_node("solo"), Vec::new());
+    }
+
+    #[test]
+    fn remove_node_drops_its_placements() {
+        let mut scheduler = BasicScheduler::default();
+        scheduler.upsert_node(get_node("gone", limits(1000, 1000), limits(1000, 1000)));
+        scheduler.record_placement("default", "web", "gone", limits(300, 200));
+
+        scheduler.remove_node("gone");
+
+        // A same-named node reappearing later must not inherit the stale claim.
+        scheduler.upsert_node(get_node("gone", limits(1000, 1000), limits(1000, 1000)));
+        assert_eq!(
+            scheduler.effective_allocatable(&get_node("gone", limits(1000, 1000), limits(1000, 1000))),
+            Some(limits(1000, 1000))
+        );
+        assert!(!scheduler.release_placement("default", "web"));
     }
 }
