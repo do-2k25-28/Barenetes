@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use proto::api::v1::api_server_client::ApiServerClient;
 use proto::api::v1::{AssignPodRequest, WatchNodesRequest, WatchPodsRequest, assign_pod_request};
-use proto::shared::v1::{EventType, NodeStatus, Pod, Resources};
+use proto::shared::v1::{EventType, NodeStatus, Pod, Port, Resources};
 use proto::tls::{TlsArgs, TlsMode, load_client_tls_config, tls_mode};
 use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
@@ -59,7 +59,7 @@ type PodKey = (String, String);
 #[derive(Default)]
 struct SchedulerState {
     scheduler: BasicScheduler,
-    pending: HashMap<PodKey, Pod>,
+    pending: HashMap<PodKey, (Pod, Vec<Port>)>,
 }
 
 #[tokio::main]
@@ -142,8 +142,9 @@ async fn reschedule_orphaned_pods(
 ) -> Result<()> {
     let orphaned = state.lock().await.scheduler.evict_node(node_name);
 
-    for (namespace, name, limits) in orphaned {
-        reschedule_one_orphaned_pod(client, state, node_name, &namespace, &name, limits).await?;
+    for (namespace, name, limits, ports) in orphaned {
+        reschedule_one_orphaned_pod(client, state, node_name, &namespace, &name, limits, ports)
+            .await?;
     }
 
     Ok(())
@@ -164,6 +165,7 @@ async fn reschedule_one_orphaned_pod(
     namespace: &str,
     name: &str,
     limits: Resources,
+    ports: Vec<Port>,
 ) -> Result<()> {
     let pod = Pod {
         name: name.to_string(),
@@ -195,29 +197,29 @@ async fn reschedule_one_orphaned_pod(
             // Park it in `pending` so a later node event's `retry_pending`
             // sweep can recover it.
             let key = (namespace.to_string(), name.to_string());
-            state.lock().await.pending.insert(key, pod);
+            state.lock().await.pending.insert(key, (pod, ports));
             return Ok(());
         }
     }
 
-    try_schedule(client, state, namespace, name, &pod, false).await
+    try_schedule(client, state, namespace, name, &pod, &ports, false).await
 }
 
 async fn retry_pending(
     client: &mut ApiServerClient<Channel>,
     state: &Arc<Mutex<SchedulerState>>,
 ) -> Result<()> {
-    let retry: Vec<(PodKey, Pod)> = {
+    let retry: Vec<(PodKey, Pod, Vec<Port>)> = {
         let guard = state.lock().await;
         guard
             .pending
             .iter()
-            .map(|(key, pod)| (key.clone(), pod.clone()))
+            .map(|(key, (pod, ports))| (key.clone(), pod.clone(), ports.clone()))
             .collect()
     };
 
-    for ((namespace, name), pod) in retry {
-        try_schedule(client, state, &namespace, &name, &pod, true).await?;
+    for ((namespace, name), pod, ports) in retry {
+        try_schedule(client, state, &namespace, &name, &pod, &ports, true).await?;
     }
 
     Ok(())
@@ -243,6 +245,20 @@ async fn watch_pods(
             .as_ref()
             .and_then(|core| core.spec.as_ref())
             .map(|spec| spec.namespace.clone())
+            .unwrap_or_default();
+        // Every container's declared host-port mappings, gathered up front:
+        // the scheduler needs them to avoid placing this pod on a node where
+        // another pod already claimed one of the same host ports.
+        let ports: Vec<Port> = pod_detail
+            .core
+            .as_ref()
+            .and_then(|core| core.spec.as_ref())
+            .map(|spec| {
+                spec.containers
+                    .iter()
+                    .flat_map(|container| container.ports.clone())
+                    .collect()
+            })
             .unwrap_or_default();
         let Some(pod) = pod_detail.core.as_ref().and_then(|core| core.pod.clone()) else {
             continue;
@@ -281,6 +297,7 @@ async fn watch_pods(
                     &namespace,
                     &pod.name,
                     limits,
+                    ports,
                 )
                 .await?;
                 continue;
@@ -293,6 +310,7 @@ async fn watch_pods(
                 &pod.name,
                 &pod_detail.node_name,
                 pod.limits.unwrap_or_default(),
+                &ports,
             );
             continue;
         }
@@ -308,7 +326,16 @@ async fn watch_pods(
             continue;
         }
 
-        try_schedule(&mut client, &state, &namespace, &pod.name, &pod, false).await?;
+        try_schedule(
+            &mut client,
+            &state,
+            &namespace,
+            &pod.name,
+            &pod,
+            &ports,
+            false,
+        )
+        .await?;
     }
 
     Ok(())
@@ -332,6 +359,7 @@ async fn try_schedule(
     namespace: &str,
     name: &str,
     pod: &Pod,
+    ports: &[Port],
     only_if_pending: bool,
 ) -> Result<()> {
     let key = (namespace.to_string(), name.to_string());
@@ -344,7 +372,7 @@ async fn try_schedule(
             // snapshot was taken.
             return Ok(());
         }
-        let outcome = guard.scheduler.place(pod);
+        let outcome = guard.scheduler.place(pod, ports);
         match &outcome {
             Ok(node_name) => {
                 println!("Scheduling pod {namespace}/{name} on {node_name}");
@@ -353,12 +381,15 @@ async fn try_schedule(
                     name,
                     node_name,
                     pod.limits.unwrap_or_default(),
+                    ports,
                 );
                 guard.pending.remove(&key);
             }
             Err(reason) => {
                 println!("Pod {namespace}/{name} is unschedulable: {reason}");
-                guard.pending.insert(key.clone(), pod.clone());
+                guard
+                    .pending
+                    .insert(key.clone(), (pod.clone(), ports.to_vec()));
             }
         }
         outcome
