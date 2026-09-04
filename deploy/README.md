@@ -102,6 +102,26 @@ is still required (the worker half needs it), but unlike a separate
 was just generated locally, so the agent's certificate is issued from it
 directly.
 
+## Installing the barectl CLI
+
+`install.sh` doesn't install `barectl` (it's a client, not a service). Each
+release publishes it as a `.deb`, a `.rpm`, and a pacman `.pkg.tar.zst`
+alongside the raw binaries, so on any machine that talks to a control plane:
+
+```sh
+# Debian / Ubuntu / Mint / Pop!_OS
+sudo apt install ./barenetes-barectl_*.deb
+# Fedora / RHEL / Rocky / AlmaLinux / openSUSE
+sudo dnf install ./barenetes-barectl-*.rpm
+# Arch / Manjaro / EndeavourOS
+sudo pacman -U ./barenetes-barectl-*.pkg.tar.zst
+```
+
+All three install `/usr/bin/barectl`. On distros without a supported package
+format (Alpine, ...), grab the raw `barenetes-barectl-linux-x86_64` asset and
+put it on your `PATH` (e.g. `install -m 0755
+barenetes-barectl-linux-x86_64 /usr/local/bin/barectl`).
+
 ## Options
 
 Run `./deploy/install.sh --help` for the full flag reference (`--version`,
