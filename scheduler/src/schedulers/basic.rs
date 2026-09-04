@@ -306,12 +306,8 @@ mod tests {
         let evicted = scheduler.evict_node("dead");
 
         assert_eq!(evicted.len(), 2);
-        assert!(
-            evicted.contains(&("default".to_string(), "web".to_string(), limits(300, 200)))
-        );
-        assert!(
-            evicted.contains(&("ns2".to_string(), "other".to_string(), limits(100, 100)))
-        );
+        assert!(evicted.contains(&("default".to_string(), "web".to_string(), limits(300, 200))));
+        assert!(evicted.contains(&("ns2".to_string(), "other".to_string(), limits(100, 100))));
 
         let dead = get_node("dead", limits(1000, 1000), limits(1000, 1000));
         assert_eq!(
@@ -342,7 +338,11 @@ mod tests {
         // A same-named node reappearing later must not inherit the stale claim.
         scheduler.upsert_node(get_node("gone", limits(1000, 1000), limits(1000, 1000)));
         assert_eq!(
-            scheduler.effective_allocatable(&get_node("gone", limits(1000, 1000), limits(1000, 1000))),
+            scheduler.effective_allocatable(&get_node(
+                "gone",
+                limits(1000, 1000),
+                limits(1000, 1000)
+            )),
             Some(limits(1000, 1000))
         );
         assert!(!scheduler.release_placement("default", "web"));
@@ -353,7 +353,11 @@ mod tests {
         let mut scheduler = BasicScheduler::default();
         assert!(!scheduler.is_confirmed_not_ready("unseen"));
 
-        scheduler.upsert_node(get_node("ready-node", limits(1000, 1000), limits(1000, 1000)));
+        scheduler.upsert_node(get_node(
+            "ready-node",
+            limits(1000, 1000),
+            limits(1000, 1000),
+        ));
         assert!(!scheduler.is_confirmed_not_ready("ready-node"));
 
         let mut dead = get_node("dead-node", limits(1000, 1000), limits(1000, 1000));

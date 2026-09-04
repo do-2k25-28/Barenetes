@@ -540,7 +540,11 @@ mod tests {
     async fn test_assign_pod_unknown_pod_is_not_found() {
         let service = test_support::service();
 
-        for outcome in [placed_on("node-a"), unschedulable("no fit"), orphaned("no fit")] {
+        for outcome in [
+            placed_on("node-a"),
+            unschedulable("no fit"),
+            orphaned("no fit"),
+        ] {
             let err = service
                 .assign_pod_impl(assign_request("default", "ghost", outcome))
                 .await

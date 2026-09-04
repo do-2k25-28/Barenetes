@@ -267,7 +267,9 @@ async fn watch_pods(
         if !pod_detail.node_name.is_empty() {
             let confirmed_not_ready = {
                 let guard = state.lock().await;
-                guard.scheduler.is_confirmed_not_ready(&pod_detail.node_name)
+                guard
+                    .scheduler
+                    .is_confirmed_not_ready(&pod_detail.node_name)
             };
 
             if confirmed_not_ready {
