@@ -17,8 +17,9 @@ use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::{Stream, StreamExt};
 use tonic::{Request, Response, Status};
 
+use proto::tls_identity::Role;
+
 use crate::store::Store;
-use crate::tls_identity::Role;
 
 /// Stream types for the 3 server-streaming RPCs.
 pub type PodEventStream =
@@ -109,12 +110,12 @@ pub struct ApiService {
 }
 
 /// Rejects `request` unless its mTLS peer is authorized for `role` (a no-op
-/// in plaintext mode, see [`crate::tls_identity::check_role`]). Every
+/// in plaintext mode, see [`proto::tls_identity::check_role`]). Every
 /// cluster certificate authenticates against the same CA, so without this
 /// gate any cert -- including a worker's, distributed to every node --
 /// would be authorized to call every RPC.
 fn require_role<T>(request: &Request<T>, role: Role) -> Result<(), Status> {
-    crate::tls_identity::check_role(&crate::tls_identity::peer(request), role)
+    proto::tls_identity::check_role(&proto::tls_identity::peer(request), role)
 }
 
 #[tonic::async_trait]

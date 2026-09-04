@@ -7,6 +7,12 @@
 //! certificate -- distributed to every node -- could call CreatePod,
 //! DeletePod or AssignPod just as well as a real operator or the
 //! scheduler).
+//!
+//! Lives in `proto` rather than `api` because it gates RPCs served by more
+//! than one binary: `api` uses it for the CLI/scheduler/agent-facing API,
+//! and `agent` uses it for the Kubelet service's `ApplyPod`/`DeletePod`,
+//! which otherwise any cluster cert could call directly on a worker,
+//! bypassing the API server and scheduler entirely.
 use tonic::transport::server::{TcpConnectInfo, TlsConnectInfo};
 use tonic::{Request, Status};
 use x509_parser::certificate::X509Certificate;
@@ -15,7 +21,7 @@ use x509_parser::extensions::GeneralName;
 /// The cluster role a peer certificate is authorized for, read from the
 /// subject's Organizational Unit set by `barenetes-pki issue --role`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Role {
+pub enum Role {
     /// The API server's own identity. Never itself a caller of any RPC.
     Api,
     Scheduler,
@@ -55,7 +61,7 @@ impl Role {
 /// indistinguishable from a trusted plaintext caller -- that conflation is
 /// exactly what let a CA-signed certificate with no CN/SAN bypass the
 /// node-name check.
-pub(crate) enum Peer {
+pub enum Peer {
     Plaintext,
     Mtls {
         identity: Option<String>,
@@ -66,7 +72,7 @@ pub(crate) enum Peer {
 /// Inspects `request`'s transport for an mTLS peer certificate and, if one
 /// is present, extracts its identity (CN, or failing that the first DNS
 /// SAN) and role (OU).
-pub(crate) fn peer<T>(request: &Request<T>) -> Peer {
+pub fn peer<T>(request: &Request<T>) -> Peer {
     let Some(tls_info) = request.extensions().get::<TlsConnectInfo<TcpConnectInfo>>() else {
         return Peer::Plaintext;
     };
@@ -121,7 +127,7 @@ fn role_of(cert: &X509Certificate<'_>) -> Option<Role> {
 /// it claims. Plaintext (no PKI configured) is a no-op: there's no identity
 /// to check. An mTLS peer whose certificate has no usable CN/SAN is
 /// rejected outright, rather than silently allowed through like plaintext.
-pub(crate) fn check_identity(peer: &Peer, node_name: &str) -> Result<(), Status> {
+pub fn check_identity(peer: &Peer, node_name: &str) -> Result<(), Status> {
     match peer {
         Peer::Plaintext => Ok(()),
         Peer::Mtls {
@@ -131,8 +137,8 @@ pub(crate) fn check_identity(peer: &Peer, node_name: &str) -> Result<(), Status>
         Peer::Mtls {
             identity: Some(identity),
             ..
-        } => Err(crate::errors::identity_mismatch(identity, node_name)),
-        Peer::Mtls { identity: None, .. } => Err(crate::errors::missing_identity(node_name)),
+        } => Err(identity_mismatch(identity, node_name)),
+        Peer::Mtls { identity: None, .. } => Err(missing_identity(node_name)),
     }
 }
 
@@ -140,7 +146,7 @@ pub(crate) fn check_identity(peer: &Peer, node_name: &str) -> Result<(), Status>
 /// role. Plaintext is a no-op, same as [`check_identity`]. A certificate
 /// with no recognized OU is rejected rather than treated as any particular
 /// role.
-pub(crate) fn check_role(peer: &Peer, expected: Role) -> Result<(), Status> {
+pub fn check_role(peer: &Peer, expected: Role) -> Result<(), Status> {
     match peer {
         Peer::Plaintext => Ok(()),
         Peer::Mtls {
@@ -148,11 +154,27 @@ pub(crate) fn check_role(peer: &Peer, expected: Role) -> Result<(), Status> {
         } if *role == expected => Ok(()),
         Peer::Mtls {
             role: Some(role), ..
-        } => Err(crate::errors::role_denied(role.as_str(), expected.as_str())),
-        Peer::Mtls { role: None, .. } => {
-            Err(crate::errors::role_denied("<none>", expected.as_str()))
-        }
+        } => Err(role_denied(role.as_str(), expected.as_str())),
+        Peer::Mtls { role: None, .. } => Err(role_denied("<none>", expected.as_str())),
     }
+}
+
+fn identity_mismatch(peer: &str, node_name: &str) -> Status {
+    Status::permission_denied(format!(
+        "mTLS peer identity \"{peer}\" does not match claimed node name \"{node_name}\""
+    ))
+}
+
+fn missing_identity(node_name: &str) -> Status {
+    Status::permission_denied(format!(
+        "mTLS peer certificate has no usable CN/SAN identity; refusing to trust its claim to be node \"{node_name}\""
+    ))
+}
+
+fn role_denied(peer_role: &str, expected_role: &str) -> Status {
+    Status::permission_denied(format!(
+        "mTLS peer role \"{peer_role}\" is not authorized to call this RPC (requires role \"{expected_role}\")"
+    ))
 }
 
 #[cfg(test)]

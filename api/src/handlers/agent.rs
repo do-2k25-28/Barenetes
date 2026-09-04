@@ -17,7 +17,7 @@ impl ApiService {
     ) -> Result<Response<UpdatePodStatusResponse>, Status> {
         // Captured before `into_inner()` consumes the request, which also owns the
         // extensions the mTLS peer certificate is attached to.
-        let peer = crate::tls_identity::peer(&request);
+        let peer = proto::tls_identity::peer(&request);
         let UpdatePodStatusRequest {
             pod,
             container_statuses,
@@ -59,7 +59,7 @@ impl ApiService {
             .await
             .map_err(|e| e.to_status())?
             .ok_or_else(|| crate::errors::pod_not_found(&spec.namespace, &reported_pod.name))?;
-        crate::tls_identity::check_identity(&peer, &existing.node_name)?;
+        proto::tls_identity::check_identity(&peer, &existing.node_name)?;
 
         let found = self
             .store
@@ -102,7 +102,7 @@ impl ApiService {
     ) -> Result<Response<UpdateNodeStatusResponse>, Status> {
         // Captured before `into_inner()` consumes the request, which also owns the
         // extensions the mTLS peer certificate is attached to.
-        let peer = crate::tls_identity::peer(&request);
+        let peer = proto::tls_identity::peer(&request);
         let req = request.into_inner();
         let node = req
             .node
@@ -110,7 +110,7 @@ impl ApiService {
         if node.name.is_empty() {
             return Err(Status::invalid_argument("missing node name"));
         }
-        crate::tls_identity::check_identity(&peer, &node.name)?;
+        proto::tls_identity::check_identity(&peer, &node.name)?;
 
         // Whatever status the agent reported is discarded: the store preserves its own,
         // atomically, so a stream opening mid-call can't be clobbered.
@@ -128,10 +128,10 @@ impl ApiService {
     ) -> Result<Response<DesiredStateEventStream>, Status> {
         // Captured before `into_inner()` consumes the request, which also owns the
         // extensions the mTLS peer certificate is attached to.
-        let peer = crate::tls_identity::peer(&request);
+        let peer = proto::tls_identity::peer(&request);
         let node_name = request.into_inner().node_name;
         validate_dns1123_subdomain(&node_name, "node name")?;
-        crate::tls_identity::check_identity(&peer, &node_name)?;
+        proto::tls_identity::check_identity(&peer, &node_name)?;
 
         // Rejected before the snapshot below, which scans every pod in the cluster: an
         // unknown node shouldn't be able to cost a full keyspace read on its way to a

@@ -1,5 +1,5 @@
 //! Drives a real TLS-terminated `ApiServerServer` over the network, so the
-//! mTLS peer-identity and per-RPC role checks in api/src/tls_identity.rs
+//! mTLS peer-identity and per-RPC role checks in proto/src/tls_identity.rs
 //! are proven at the transport level, not just against a bare `Request` in
 //! a unit test.
 use std::net::SocketAddr;

@@ -99,7 +99,6 @@ dependencies = [
  "tonic-prost",
  "tracing",
  "tracing-subscriber",
- "x509-parser",
 ]
 
 [[package]]
@@ -1083,6 +1082,7 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
+ "x509-parser",
 ]
 
 [[package]]

@@ -51,7 +51,7 @@ struct InitCaArgs {
 
 /// The cluster role a leaf certificate is authorized for, recorded in its
 /// subject's Organizational Unit. The API server's per-RPC authorization
-/// (see `api/src/tls_identity.rs`) trusts this field, not the CN: CN is the
+/// (see `proto/src/tls_identity.rs`) trusts this field, not the CN: CN is the
 /// claimed *identity* (compared against a request's `node_name`), OU is the
 /// claimed *role* (compared against which RPCs that role may call). Every
 /// cluster certificate authenticates against the same CA, so without this

@@ -18,24 +18,6 @@ pub(crate) fn pod_already_exists(namespace: &str, name: &str) -> Status {
     Status::already_exists(format!("pod {namespace}/{name} already exists"))
 }
 
-pub(crate) fn identity_mismatch(peer: &str, node_name: &str) -> Status {
-    Status::permission_denied(format!(
-        "mTLS peer identity \"{peer}\" does not match claimed node name \"{node_name}\""
-    ))
-}
-
-pub(crate) fn missing_identity(node_name: &str) -> Status {
-    Status::permission_denied(format!(
-        "mTLS peer certificate has no usable CN/SAN identity; refusing to trust its claim to be node \"{node_name}\""
-    ))
-}
-
-pub(crate) fn role_denied(peer_role: &str, expected_role: &str) -> Status {
-    Status::permission_denied(format!(
-        "mTLS peer role \"{peer_role}\" is not authorized to call this RPC (requires role \"{expected_role}\")"
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use tonic::Code;
@@ -68,11 +50,5 @@ mod tests {
         let status = missing_node("node-1");
         assert_eq!(status.code(), Code::InvalidArgument);
         assert_eq!(status.message(), "missing node node-1");
-    }
-
-    #[test]
-    fn test_identity_mismatch() {
-        let status = identity_mismatch("node-a", "node-b");
-        assert_eq!(status.code(), Code::PermissionDenied);
     }
 }

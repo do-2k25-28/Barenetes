@@ -23,3 +23,4 @@ pub mod shared {
 }
 
 pub mod tls;
+pub mod tls_identity;

@@ -9,5 +9,4 @@ pub mod store;
 mod telemetry;
 #[cfg(test)]
 mod test_support;
-mod tls_identity;
 mod validation;
