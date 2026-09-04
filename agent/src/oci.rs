@@ -4,7 +4,17 @@ use serde_json::{Value, json};
 ///
 /// The root path is relative to the bundle: containerd's shim mounts the
 /// snapshot we prepared into `<bundle>/rootfs` before starting the container.
-pub fn spec(hostname: &str, args: &[String], env: &[String], cwd: &str) -> Value {
+///
+/// `cgroups_path` is the leaf cgroup runc puts the container in. It stays
+/// unconfigured: resource limits belong to the pod cgroup above it, see
+/// [`crate::cgroup`].
+pub fn spec(
+    hostname: &str,
+    args: &[String],
+    env: &[String],
+    cwd: &str,
+    cgroups_path: &str,
+) -> Value {
     json!({
         "ociVersion": "1.0.2",
         "process": {
@@ -51,6 +61,7 @@ pub fn spec(hostname: &str, args: &[String], env: &[String], cwd: &str) -> Value
             },
         ],
         "linux": {
+            "cgroupsPath": cgroups_path,
             "namespaces": [
                 { "type": "pid" },
                 { "type": "ipc" },
@@ -75,4 +86,38 @@ pub fn spec(hostname: &str, args: &[String], env: &[String], cwd: &str) -> Value
             ],
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spec_with(cgroups_path: &str) -> Value {
+        spec("c", &["/bin/sh".to_string()], &[], "/", cgroups_path)
+    }
+
+    #[test]
+    fn test_the_container_runs_in_the_cgroup_it_was_given() {
+        let spec = spec_with("/barenetes/default.web/default.web-app");
+
+        assert_eq!(
+            spec["linux"]["cgroupsPath"],
+            "/barenetes/default.web/default.web-app"
+        );
+    }
+
+    #[test]
+    fn test_the_container_cgroup_carries_no_limit_of_its_own() {
+        assert!(
+            spec_with("/barenetes/default.web/default.web-app")["linux"]["resources"].is_null()
+        );
+    }
+
+    #[test]
+    fn test_the_cgroup_does_not_disturb_the_rest_of_the_spec() {
+        let spec = spec_with("/barenetes/default.web/default.web-app");
+
+        assert_eq!(spec["hostname"], "c");
+        assert_eq!(spec["linux"]["namespaces"][0]["type"], "pid");
+    }
 }
