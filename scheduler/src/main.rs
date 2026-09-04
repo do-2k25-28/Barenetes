@@ -143,6 +143,13 @@ async fn reschedule_orphaned_pods(
     let orphaned = state.lock().await.scheduler.evict_node(node_name);
 
     for (namespace, name, limits) in orphaned {
+        let pod = Pod {
+            name: name.clone(),
+            status: 0,
+            requests: None,
+            limits: Some(limits),
+        };
+
         let reason = format!("node {node_name} became NotReady");
         let result = client
             .assign_pod(AssignPodRequest {
@@ -160,16 +167,16 @@ async fn reschedule_orphaned_pods(
             }
             Err(status) => {
                 println!("Failed to mark {namespace}/{name} orphaned: {status}");
+                // Already evicted from `placements` by `evict_node`, so if we
+                // don't track it somewhere it's lost from all scheduler
+                // bookkeeping forever. Park it in `pending` so a later node
+                // event's `retry_pending` sweep can recover it.
+                let key = (namespace.clone(), name.clone());
+                state.lock().await.pending.insert(key, pod);
                 continue;
             }
         }
 
-        let pod = Pod {
-            name: name.clone(),
-            status: 0,
-            requests: None,
-            limits: Some(limits),
-        };
         try_schedule(client, state, &namespace, &name, &pod, false).await?;
     }
 
