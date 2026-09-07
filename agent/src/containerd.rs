@@ -256,7 +256,7 @@ impl Containerd {
     async fn pull_image(&self, image: &str) -> Result<(), Status> {
         let platform = platform();
         let source = OciRegistry {
-            reference: image.to_string(),
+            reference: normalize_reference(image),
             resolver: Default::default(),
         };
         let destination = ImageStore {
@@ -373,6 +373,28 @@ fn container_id(pod: &str, container: &str) -> String {
     format!("{pod}-{container}")
 }
 
+/// Expand a registry-less reference (`nginx:1.27`) to a fully-qualified one
+/// (`docker.io/library/nginx:1.27`), mirroring the short-name convention
+/// Docker's CLI applies before ever talking to a registry. containerd's
+/// Transfer API does no such expansion: it hands the raw reference to Go's
+/// `url` parser, which mistakes the `:tag` on an unqualified name for a
+/// `host:port` and fails with `invalid port ... after host`.
+fn normalize_reference(image: &str) -> String {
+    let first_segment = image.split('/').next().unwrap_or(image);
+    let has_registry_host = image.contains('/')
+        && (first_segment == "localhost"
+            || first_segment.contains('.')
+            || first_segment.contains(':'));
+
+    if has_registry_host {
+        image.to_string()
+    } else if image.contains('/') {
+        format!("docker.io/{image}")
+    } else {
+        format!("docker.io/library/{image}")
+    }
+}
+
 fn platform() -> Platform {
     let architecture = match std::env::consts::ARCH {
         "x86_64" => "amd64",
@@ -415,5 +437,71 @@ fn ignore_missing<T>(result: Result<T, Status>) -> Result<Option<T>, Status> {
         Ok(value) => Ok(Some(value)),
         Err(status) if status.code() == Code::NotFound => Ok(None),
         Err(status) => Err(status),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_reference_qualifies_a_bare_image_name() {
+        assert_eq!(
+            normalize_reference("nginx:1.27"),
+            "docker.io/library/nginx:1.27"
+        );
+    }
+
+    #[test]
+    fn normalize_reference_qualifies_a_bare_name_without_a_tag() {
+        assert_eq!(normalize_reference("nginx"), "docker.io/library/nginx");
+    }
+
+    #[test]
+    fn normalize_reference_qualifies_a_namespaced_image() {
+        assert_eq!(
+            normalize_reference("fluent/fluent-bit:latest"),
+            "docker.io/fluent/fluent-bit:latest"
+        );
+    }
+
+    #[test]
+    fn normalize_reference_qualifies_a_digest_reference() {
+        assert_eq!(
+            normalize_reference("nginx@sha256:aaaa"),
+            "docker.io/library/nginx@sha256:aaaa"
+        );
+    }
+
+    #[test]
+    fn normalize_reference_leaves_an_explicit_registry_host_alone() {
+        assert_eq!(
+            normalize_reference("ghcr.io/foo/bar:tag"),
+            "ghcr.io/foo/bar:tag"
+        );
+    }
+
+    #[test]
+    fn normalize_reference_leaves_a_fully_qualified_docker_hub_reference_alone() {
+        assert_eq!(
+            normalize_reference("docker.io/library/nginx:1.27"),
+            "docker.io/library/nginx:1.27"
+        );
+    }
+
+    #[test]
+    fn normalize_reference_recognizes_a_host_with_a_port() {
+        assert_eq!(
+            normalize_reference("localhost:5000/foo:tag"),
+            "localhost:5000/foo:tag"
+        );
+    }
+
+    #[test]
+    fn normalize_reference_recognizes_bare_localhost_as_a_host() {
+        assert_eq!(
+            normalize_reference("localhost/foo:tag"),
+            "localhost/foo:tag"
+        );
     }
 }

@@ -63,6 +63,14 @@ jobs:
       - name: Build workspace binaries (release)
         run: cargo build --workspace --release --locked
 
+      - name: Generate barectl shell completions
+        run: |
+          set -euo pipefail
+          mkdir -p completions
+          target/release/barectl completion bash > completions/barectl.bash
+          target/release/barectl completion zsh > completions/_barectl
+          target/release/barectl completion fish > completions/barectl.fish
+
       - name: Package binaries
         run: |
           set -euo pipefail
@@ -82,8 +90,16 @@ jobs:
           ARCH="amd64"
 
           ROOT="pkg/${PKG}_${VERSION}_${ARCH}"
-          mkdir -p "${ROOT}/usr/bin" "${ROOT}/DEBIAN"
+          mkdir -p \
+            "${ROOT}/usr/bin" \
+            "${ROOT}/usr/share/bash-completion/completions" \
+            "${ROOT}/usr/share/zsh/site-functions" \
+            "${ROOT}/usr/share/fish/vendor_completions.d" \
+            "${ROOT}/DEBIAN"
           install -m 0755 target/release/barectl "${ROOT}/usr/bin/barectl"
+          install -m 0644 completions/barectl.bash "${ROOT}/usr/share/bash-completion/completions/barectl"
+          install -m 0644 completions/_barectl "${ROOT}/usr/share/zsh/site-functions/_barectl"
+          install -m 0644 completions/barectl.fish "${ROOT}/usr/share/fish/vendor_completions.d/barectl.fish"
 
           cat > "${ROOT}/DEBIAN/control" <<EOF
           Package: ${PKG}
@@ -94,9 +110,15 @@ jobs:
           Maintainer: do-2k25-28 <do-2k25-28@users.noreply.github.com>
           Description: Barenetes CLI (kubectl-style client for the Barenetes API server)
           EOF
-          cat > "${ROOT}/DEBIAN/md5sums" <<EOF
-          $(md5sum "${ROOT}/usr/bin/barectl" | awk '{print $1"  usr/bin/barectl"}')
-          EOF
+          MD5SUMS="$(pwd)/${ROOT}/DEBIAN/md5sums"
+          (
+            cd "${ROOT}"
+            md5sum \
+              usr/bin/barectl \
+              usr/share/bash-completion/completions/barectl \
+              usr/share/zsh/site-functions/_barectl \
+              usr/share/fish/vendor_completions.d/barectl.fish
+          ) > "${MD5SUMS}"
 
           dpkg-deb --build --root-owner-group "${ROOT}" "dist/${PKG}_${VERSION}_${ARCH}.deb"
 
@@ -107,11 +129,14 @@ jobs:
           PKG="barenetes-barectl"
           ARCH="x86_64"
 
-          export RPMBUILD_TOPDIR="$(mktemp -d)"
+          RPMBUILD_TOPDIR="$(mktemp -d)"
+          export RPMBUILD_TOPDIR
           mkdir -p "${RPMBUILD_TOPDIR}"/{BUILD,BUILDROOT,RPMS,SOURCES,SRPMS,specs}
           # %install runs in rpmbuild's own build dir, so the binary must be
-          # referenced by absolute path.
+          # referenced by absolute path. The same applies to the generated
+          # completion files.
           BIN="$(pwd)/target/release/barectl"
+          COMPLETIONS="$(pwd)/completions"
           cat > "${RPMBUILD_TOPDIR}/specs/${PKG}.spec" <<EOF
           Name: ${PKG}
           Version: ${VERSION}
@@ -124,11 +149,21 @@ jobs:
           Barenetes CLI (kubectl-style client for the Barenetes API server)
 
           %install
-          mkdir -p %{buildroot}/usr/bin
+          mkdir -p \
+            %{buildroot}/usr/bin \
+            %{buildroot}/usr/share/bash-completion/completions \
+            %{buildroot}/usr/share/zsh/site-functions \
+            %{buildroot}/usr/share/fish/vendor_completions.d
           install -m 0755 ${BIN} %{buildroot}/usr/bin/barectl
+          install -m 0644 ${COMPLETIONS}/barectl.bash %{buildroot}/usr/share/bash-completion/completions/barectl
+          install -m 0644 ${COMPLETIONS}/_barectl %{buildroot}/usr/share/zsh/site-functions/_barectl
+          install -m 0644 ${COMPLETIONS}/barectl.fish %{buildroot}/usr/share/fish/vendor_completions.d/barectl.fish
 
           %files
           /usr/bin/barectl
+          /usr/share/bash-completion/completions/barectl
+          /usr/share/zsh/site-functions/_barectl
+          /usr/share/fish/vendor_completions.d/barectl.fish
           EOF
 
           rpmbuild --bb --define "_topdir ${RPMBUILD_TOPDIR}" "${RPMBUILD_TOPDIR}/specs/${PKG}.spec"
@@ -142,8 +177,15 @@ jobs:
           ARCH="x86_64"
 
           ROOT="pkg/${PKG}-${VERSION}-1-${ARCH}"
-          mkdir -p "${ROOT}/usr/bin"
+          mkdir -p \
+            "${ROOT}/usr/bin" \
+            "${ROOT}/usr/share/bash-completion/completions" \
+            "${ROOT}/usr/share/zsh/site-functions" \
+            "${ROOT}/usr/share/fish/vendor_completions.d"
           install -m 0755 target/release/barectl "${ROOT}/usr/bin/barectl"
+          install -m 0644 completions/barectl.bash "${ROOT}/usr/share/bash-completion/completions/barectl"
+          install -m 0644 completions/_barectl "${ROOT}/usr/share/zsh/site-functions/_barectl"
+          install -m 0644 completions/barectl.fish "${ROOT}/usr/share/fish/vendor_completions.d/barectl.fish"
 
           # .PKGINFO's size field is the final compressed package size, which
           # isn't known until after a build -- so build with a placeholder,
