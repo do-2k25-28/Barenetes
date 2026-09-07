@@ -136,8 +136,9 @@ async fn register_and_watch(
                     })
                     .await
                 {
-                    Ok(_) => {
-                        report_pod_status(api, &pod, PodStatus::Running, None).await;
+                    Ok(response) => {
+                        let pod_ip = response.into_inner().pod_ip;
+                        report_pod_status(api, &pod, PodStatus::Running, pod_ip, None).await;
                     }
                     Err(status) => {
                         eprintln!("agent: failed to apply pod from desired state: {status}");
@@ -145,6 +146,7 @@ async fn register_and_watch(
                             api,
                             &pod,
                             PodStatus::Failed,
+                            None,
                             Some(status.message().to_string()),
                         )
                         .await;
@@ -186,6 +188,7 @@ async fn report_pod_status(
     api: &mut ApiServerClient<Channel>,
     pod: &PodWithSpec,
     observed_status: PodStatus,
+    pod_ip: Option<String>,
     message: Option<String>,
 ) {
     let mut reported = pod.clone();
@@ -196,7 +199,7 @@ async fn report_pod_status(
         .update_pod_status(UpdatePodStatusRequest {
             pod: Some(reported),
             container_statuses: Vec::new(),
-            pod_ip: None,
+            pod_ip,
             message,
             resource_usage: None,
         })

@@ -97,18 +97,23 @@ impl KubeletService {
         }
     }
 
+    /// Returns the pod's address: each container gets its own CNI attach (and
+    /// its own IP) rather than sharing one pod network namespace today, so
+    /// the first container's address stands in for the pod's until that
+    /// changes.
     async fn create_containers(
         &self,
         containers: &[proto::shared::v1::Container],
         pod_id: &str,
         namespace: &str,
         vlan: u32,
-    ) -> Result<(), Status> {
+    ) -> Result<Option<String>, Status> {
         let workload = WorkloadRef {
             workload_name: pod_id.to_string(),
             instance_name: namespace.to_string(),
         };
 
+        let mut pod_ip = None;
         for container in containers {
             let network = NetworkRef {
                 network_name: container.name.clone(),
@@ -124,7 +129,8 @@ impl KubeletService {
 
             // Attach the running container to its isolated tenant network,
             // forwarding whatever host<->container port mappings it declared.
-            self.cni
+            let workload_network = self
+                .cni
                 .add_network(
                     workload.clone(),
                     network.clone(),
@@ -133,8 +139,11 @@ impl KubeletService {
                     container.ports.clone(),
                 )
                 .await?;
+            if pod_ip.is_none() {
+                pod_ip = Some(workload_network.ip_address);
+            }
         }
-        Ok(())
+        Ok(pod_ip)
     }
 }
 
@@ -216,13 +225,14 @@ impl Kubelet for KubeletService {
                 .await
         }
         .await;
-        if outcome.is_err() {
-            self.rollback(&pod_id, namespace, &spec.containers, vlan)
-                .await;
-            return outcome.map(|_| Response::new(ApplyPodResponse { pod_id }));
+        match outcome {
+            Ok(pod_ip) => Ok(Response::new(ApplyPodResponse { pod_id, pod_ip })),
+            Err(error) => {
+                self.rollback(&pod_id, namespace, &spec.containers, vlan)
+                    .await;
+                Err(error)
+            }
         }
-
-        Ok(Response::new(ApplyPodResponse { pod_id }))
     }
 
     async fn delete_pod(
