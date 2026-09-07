@@ -84,11 +84,16 @@ pub fn resolve_tls(cli_tls: &TlsArgs, file: Option<&FileConfig>) -> Result<Resol
         &file.client_key_data,
     ) {
         (Some(ca), Some(cert), Some(key)) => {
-            let server_name = file.tls_server_name.clone().ok_or_else(|| {
-                CliError::InvalidUsage(
-                    "config file has TLS data but no tls-server-name".to_string(),
-                )
-            })?;
+            let server_name = cli_tls
+                .tls_server_name
+                .clone()
+                .or_else(|| file.tls_server_name.clone())
+                .ok_or_else(|| {
+                    CliError::InvalidUsage(
+                        "config file has TLS data but no tls-server-name (set it in the file or pass --tls-server-name)"
+                            .to_string(),
+                    )
+                })?;
             Ok(ResolvedTls::Bytes {
                 cert: decode(cert, "client-certificate-data")?,
                 key: decode(key, "client-key-data")?,
@@ -220,5 +225,21 @@ mod tests {
         let mut file = file_config_with_tls();
         file.tls_server_name = None;
         assert!(resolve_tls(&tls_args(None, None, None, None), Some(&file)).is_err());
+    }
+
+    #[test]
+    fn resolve_tls_prefers_cli_server_name_over_file_when_using_file_tls_data() {
+        let file = file_config_with_tls();
+        let resolved = resolve_tls(
+            &tls_args(None, None, None, Some("cli-override")),
+            Some(&file),
+        )
+        .unwrap();
+        match resolved {
+            ResolvedTls::Bytes { server_name, .. } => {
+                assert_eq!(server_name, "cli-override");
+            }
+            _ => panic!("expected Bytes"),
+        }
     }
 }
