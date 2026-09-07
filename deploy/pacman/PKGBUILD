@@ -1,0 +1,24 @@
+pkgname=barenetes-barectl
+# deploy/package-barectl-pacman.sh replaces this value in its staging area.
+pkgver=0.0.0
+pkgrel=1
+pkgdesc="Barenetes CLI (kubectl-style client for the Barenetes API server)"
+arch=('x86_64')
+url="https://github.com/do-2k25-28/Barenetes"
+license=('MIT')
+depends=('glibc' 'libgcc')
+options=('!debug')
+source=('barectl' 'barectl.bash' '_barectl' 'barectl.fish' 'LICENSE')
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
+
+package() {
+  install -Dm755 "$srcdir/barectl" "$pkgdir/usr/bin/barectl"
+  install -Dm644 "$srcdir/barectl.bash" \
+    "$pkgdir/usr/share/bash-completion/completions/barectl"
+  install -Dm644 "$srcdir/_barectl" \
+    "$pkgdir/usr/share/zsh/site-functions/_barectl"
+  install -Dm644 "$srcdir/barectl.fish" \
+    "$pkgdir/usr/share/fish/vendor_completions.d/barectl.fish"
+  install -Dm644 "$srcdir/LICENSE" \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

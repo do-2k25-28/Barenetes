@@ -173,66 +173,16 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)"
-          PKG="barenetes-barectl"
-          ARCH="x86_64"
+          deploy/package-barectl-pacman.sh \
+            "$VERSION" target/release/barectl completions dist
 
-          ROOT="pkg/${PKG}-${VERSION}-1-${ARCH}"
-          mkdir -p \
-            "${ROOT}/usr/bin" \
-            "${ROOT}/usr/share/bash-completion/completions" \
-            "${ROOT}/usr/share/zsh/site-functions" \
-            "${ROOT}/usr/share/fish/vendor_completions.d"
-          install -m 0755 target/release/barectl "${ROOT}/usr/bin/barectl"
-          install -m 0644 completions/barectl.bash "${ROOT}/usr/share/bash-completion/completions/barectl"
-          install -m 0644 completions/_barectl "${ROOT}/usr/share/zsh/site-functions/_barectl"
-          install -m 0644 completions/barectl.fish "${ROOT}/usr/share/fish/vendor_completions.d/barectl.fish"
-
-          # .PKGINFO's size field is the final compressed package size, which
-          # isn't known until after a build -- so build with a placeholder,
-          # measure, and rebuild until the recorded size matches the actual
-          # one (the digit count of the size affects the compressed size).
-          write_pkginfo() {
-            cat > "${ROOT}/.PKGINFO" <<EOF
-          pkgname = ${PKG}
-          pkgver = ${VERSION}
-          pkgdesc = Barenetes CLI (kubectl-style client for the Barenetes API server)
-          arch = ${ARCH}
-          url = https://github.com/do-2k25-28/Barenetes
-          builddate = $(date +%s)
-          size = $1
-          packager = do-2k25-28 <do-2k25-28@users.noreply.github.com>
-          EOF
-          }
-          cat > "${ROOT}/.BUILDINFO" <<EOF
-          format = 2
-          pkgname = ${PKG}
-          pkgbase = ${PKG}
-          pkgver = ${VERSION}
-          pkgarch = ${ARCH}
-          pkgbuildtime = $(date +%s)
-          buildhost = $(hostname)
-          EOF
-
-          PKGFILE="dist/${PKG}-${VERSION}-1-${ARCH}.pkg.tar.zst"
-          build_pkg() {
-            rm -f "${PKGFILE}"
-            tar --sort=name --owner=0 --group=0 --numeric-owner -C "${ROOT}" -cf - . \
-              | zstd -q -T0 -o "${PKGFILE}"
-          }
-          recorded_size() {
-            grep -m1 '^size = ' "${ROOT}/.PKGINFO" | awk '{print $3}'
-          }
-
-          write_pkginfo 0
-          build_pkg
-          for _ in 1 2 3 4 5; do
-            SIZE="$(stat -c%s "${PKGFILE}")"
-            [[ "$SIZE" -eq "$(recorded_size)" ]] && break
-            write_pkginfo "${SIZE}"
-            build_pkg
-          done
-          [[ "$(stat -c%s "${PKGFILE}")" -eq "$(recorded_size)" ]] \
-            || { echo "::error::pkg size field did not converge" >&2; exit 1; }
+      - name: Test pacman package on Arch Linux
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)"
+          deploy/tests/pacman-package.sh \
+            "dist/barenetes-barectl-${VERSION}-1-x86_64.pkg.tar.zst" \
+            "$VERSION"
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
