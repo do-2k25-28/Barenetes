@@ -273,7 +273,7 @@ fn pod_limits(pod: &PodDetail) -> Option<&Resources> {
         .and_then(|p| p.limits.as_ref())
 }
 
-pub async fn get_node(server: &str, tls: &TlsArgs, args: GetNodeArgs) -> Result<(), CliError> {
+pub async fn get_node(server: &str, tls: &ResolvedTls, args: GetNodeArgs) -> Result<(), CliError> {
     let client = connect(server, tls).await?;
 
     match args.name {
@@ -664,6 +664,8 @@ mod tests {
     #[test]
     fn fmt_resource_quantity_shows_dash_when_unset() {
         assert_eq!(fmt_resource_quantity(None, "m"), "-");
+    }
+
     #[test]
     fn format_view_reports_no_file_when_absent() {
         let path = std::path::PathBuf::from("/tmp/does-not-exist/config");
