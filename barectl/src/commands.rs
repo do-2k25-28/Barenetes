@@ -198,8 +198,17 @@ pub async fn get_pod(server: &str, tls: &ResolvedTls, args: GetPodArgs) -> Resul
     pods.sort_by(|a, b| (pod_namespace(a), pod_name(a)).cmp(&(pod_namespace(b), pod_name(b))));
 
     println!(
-        "{:<15} {:<12} {:<16} {:<15} {:<8} {:<8} {:<9} {:<9} IMAGE",
-        "NAME", "NAMESPACE", "STATUS", "NODE", "CPU-REQ", "CPU-LIM", "MEM-REQ", "MEM-LIM"
+        "{:<15} {:<12} {:<16} {:<15} {:<15} {:<8} {:<8} {:<9} {:<9} {:<20} IMAGE",
+        "NAME",
+        "NAMESPACE",
+        "STATUS",
+        "NODE",
+        "POD-IP",
+        "CPU-REQ",
+        "CPU-LIM",
+        "MEM-REQ",
+        "MEM-LIM",
+        "PORTS"
     );
     for pod in &pods {
         let images = pod_containers(pod)
@@ -211,20 +220,50 @@ pub async fn get_pod(server: &str, tls: &ResolvedTls, args: GetPodArgs) -> Resul
         let requests = pod_requests(pod);
         let limits = pod_limits(pod);
         println!(
-            "{:<15} {:<12} {:<16} {:<15} {:<8} {:<8} {:<9} {:<9} {}",
+            "{:<15} {:<12} {:<16} {:<15} {:<15} {:<8} {:<8} {:<9} {:<9} {:<20} {}",
             pod_name(pod),
             pod_namespace(pod),
             status,
             or_none(&pod.node_name),
+            pod_ip(pod),
             fmt_resource_quantity(requests.map(|r| r.cpu), "m"),
             fmt_resource_quantity(limits.map(|r| r.cpu), "m"),
             fmt_resource_quantity(requests.map(|r| r.memory), "MB"),
             fmt_resource_quantity(limits.map(|r| r.memory), "MB"),
+            pod_ports(pod),
             images
         );
     }
 
     Ok(())
+}
+
+fn pod_ip(pod: &PodDetail) -> &str {
+    pod.pod_ip
+        .as_deref()
+        .filter(|ip| !ip.is_empty())
+        .unwrap_or("<none>")
+}
+
+fn pod_ports(pod: &PodDetail) -> String {
+    let ports = pod_containers(pod)
+        .iter()
+        .flat_map(|c| c.ports.iter())
+        .map(|p| {
+            format!(
+                "{}->{}/{}",
+                p.external,
+                p.internal,
+                protocol_str(p.protocol)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    if ports.is_empty() {
+        "<none>".to_string()
+    } else {
+        ports
+    }
 }
 
 fn pod_name(pod: &PodDetail) -> &str {
@@ -312,17 +351,18 @@ async fn list_nodes(mut client: ApiServerClient<Channel>) -> Result<(), CliError
     nodes.sort_by(|a, b| a.name.cmp(&b.name));
 
     println!(
-        "{:<20} {:<12} {:<10} {:<10} {:<10} {:<10}",
-        "NAME", "STATUS", "CPU-CAP", "CPU-ALLOC", "MEM-CAP", "MEM-ALLOC"
+        "{:<20} {:<12} {:<15} {:<10} {:<10} {:<10} {:<10}",
+        "NAME", "STATUS", "NODE-IP", "CPU-CAP", "CPU-ALLOC", "MEM-CAP", "MEM-ALLOC"
     );
     for node in &nodes {
         let status = NodeStatus::try_from(node.status).unwrap_or(NodeStatus::NotReady);
         let capacity = node.capacity.as_ref();
         let allocatable = node.allocatable.as_ref();
         println!(
-            "{:<20} {:<12} {:<10} {:<10} {:<10} {:<10}",
+            "{:<20} {:<12} {:<15} {:<10} {:<10} {:<10} {:<10}",
             node.name,
             format!("{:?}", status),
+            or_none(&node.ip),
             fmt_resource_quantity(capacity.map(|r| r.cpu), "m"),
             fmt_resource_quantity(allocatable.map(|r| r.cpu), "m"),
             fmt_resource_quantity(capacity.map(|r| r.memory), "Mi"),
@@ -337,6 +377,7 @@ fn print_node(node: &Node) {
     let status = NodeStatus::try_from(node.status).unwrap_or(NodeStatus::NotReady);
     println!("Name:        {}", node.name);
     println!("Status:      {:?}", status);
+    println!("Node IP:     {}", or_none(&node.ip));
     if let Some(cap) = &node.capacity {
         println!("Capacity:    cpu={}m, memory={}Mi", cap.cpu, cap.memory);
     }
@@ -391,17 +432,12 @@ fn print_pod(pod: &PodDetail) {
     let name = pod_name(pod);
     let namespace = pod_namespace(pod);
     let status = pod_status(pod);
-    let pod_ip = pod
-        .pod_ip
-        .as_deref()
-        .filter(|ip| !ip.is_empty())
-        .unwrap_or("<none>");
 
     println!("Name:        {name}");
     println!("Namespace:   {namespace}");
     println!("Status:      {status:?}");
     println!("Node:        {}", or_none(&pod.node_name));
-    println!("Pod IP:      {pod_ip}");
+    println!("Pod IP:      {}", pod_ip(pod));
 
     let requests = pod_requests(pod);
     let limits = pod_limits(pod);

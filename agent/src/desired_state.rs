@@ -28,6 +28,7 @@ const RETRY_DELAY: Duration = Duration::from_secs(5);
 pub async fn run(
     server_addr: String,
     node_name: String,
+    node_ip: String,
     kubelet_addr: String,
     tls: TlsArgs,
 ) -> Result<()> {
@@ -40,7 +41,7 @@ pub async fn run(
     let mut kubelet = KubeletClient::new(kubelet_channel);
 
     loop {
-        if let Err(error) = register_and_watch(&mut api, &mut kubelet, &node_name).await {
+        if let Err(error) = register_and_watch(&mut api, &mut kubelet, &node_name, &node_ip).await {
             eprintln!("agent: desired-state watch failed, retrying in {RETRY_DELAY:?}: {error:#}");
         }
         tokio::time::sleep(RETRY_DELAY).await;
@@ -92,6 +93,7 @@ async fn register_and_watch(
     api: &mut ApiServerClient<Channel>,
     kubelet: &mut KubeletClient<Channel>,
     node_name: &str,
+    node_ip: &str,
 ) -> Result<()> {
     // Re-read on every attempt rather than once at startup: it's two cheap
     // reads, it keeps a transient failure (an unreadable /proc/meminfo in a
@@ -107,6 +109,7 @@ async fn register_and_watch(
             status: NodeStatus::Ready as i32,
             capacity: Some(capacity),
             allocatable: Some(capacity),
+            ip: node_ip.to_string(),
         }),
     })
     .await

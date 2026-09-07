@@ -16,4 +16,5 @@ message Node {
   NodeStatus status = 2;
   Resources capacity = 3; // Total machine resources
   Resources allocatable = 4; // Capacity - Sum limits of Pod
+  string ip = 5; // Node's network address, as reported by the agent
 }

@@ -33,6 +33,13 @@ struct Cli {
     #[arg(long, env = "BARENETES_AGENT_ADDR", default_value = "127.0.0.1:50053")]
     addr: String,
 
+    /// This node's network address, reported to the API server so barectl can
+    /// show where to reach it. Same variable the CNI overlay already reads,
+    /// so operators set it once per node. Optional: single-node setups that
+    /// don't set it just show `<none>` for that node's IP.
+    #[arg(long, env = "BARENETES_NODE_IP")]
+    node_ip: Option<String>,
+
     // Shared by both roles this binary plays: the Kubelet gRPC server
     // (mTLS server config) and the desired-state watch client of `api`
     // (mTLS client config, see desired_state::run).
@@ -79,8 +86,13 @@ async fn main() -> anyhow::Result<()> {
         "Connecting to API server at {} as node {node_name}",
         cli.server
     );
-    let desired_state_task =
-        tokio::spawn(desired_state::run(cli.server, node_name, cli.addr, cli.tls));
+    let desired_state_task = tokio::spawn(desired_state::run(
+        cli.server,
+        node_name,
+        cli.node_ip.unwrap_or_default(),
+        cli.addr,
+        cli.tls,
+    ));
 
     // Both tasks are meant to run for the process' whole lifetime, so the
     // first one to finish did so because something broke. `try_join!` would
