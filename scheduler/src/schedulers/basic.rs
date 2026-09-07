@@ -259,6 +259,7 @@ mod tests {
             status: NodeStatus::Ready.into(),
             capacity: Some(capacity),
             allocatable: Some(allocatable),
+            ip: String::new(),
         }
     }
 

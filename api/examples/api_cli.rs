@@ -185,6 +185,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         status: status.into(),
                         capacity: Some(Resources { cpu, memory: mem }),
                         allocatable: Some(Resources { cpu, memory: mem }),
+                        ip: String::new(),
                     }),
                 })
                 .await?;

@@ -44,6 +44,7 @@ pub(crate) fn node(name: &str, status: NodeStatus) -> Node {
         status: status as i32,
         capacity: None,
         allocatable: None,
+        ip: String::new(),
     }
 }
 

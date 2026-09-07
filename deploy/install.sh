@@ -413,6 +413,9 @@ install_worker() {
 		BARENETES_SERVER=${SERVER}
 		BARENETES_NODE_NAME=${NODE_NAME}
 		EOF
+  # Also reported to the API server (barectl shows it as NODE-IP), not just
+  # consumed by the CNI overlay.
+  [[ -n "$NODE_IP" ]] && echo "BARENETES_NODE_IP=${NODE_IP}" >> "${CONF_DIR}/agent.env"
   setup_worker_pki
 
   install_binary agent

@@ -1134,6 +1134,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_register_node_updates_ip() {
+        let store = Store::new();
+        store
+            .upsert_and_publish_node(test_support::node("node-1", NodeStatus::Ready))
+            .await
+            .unwrap();
+
+        let mut reported = test_support::node("node-1", NodeStatus::NotReady);
+        reported.ip = "10.0.0.5".to_string();
+        store.register_node(reported).await.unwrap();
+
+        let stored = store.get_node("node-1").await.unwrap().unwrap();
+        assert_eq!(
+            stored.ip, "10.0.0.5",
+            "the agent still owns the fields only it can observe"
+        );
+    }
+
+    #[tokio::test]
     async fn test_upsert_node_replaces_existing() {
         let store = Store::new();
         let mut events = store.subscribe_node_events();

@@ -140,6 +140,7 @@ fn update_node_status_request(node_name: &str) -> UpdateNodeStatusRequest {
             status: NodeStatus::Ready as i32,
             capacity: None,
             allocatable: None,
+            ip: String::new(),
         }),
     }
 }
