@@ -16,6 +16,10 @@ message ApplyPodRequest {
 
 message ApplyPodResponse {
   string pod_id = 1;
+
+  // The pod's assigned network address, once the CNI daemon attached at
+  // least one of its containers. Absent on failure.
+  optional string pod_ip = 2;
 }
 
 message DeletePodRequest {
