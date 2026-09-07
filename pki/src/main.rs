@@ -32,6 +32,9 @@ enum Command {
     InitCa(InitCaArgs),
     /// Issue a leaf certificate signed by an existing certificate authority.
     Issue(IssueArgs),
+    /// Package an already-issued `cli`-role certificate into a barectl
+    /// config file, ready to hand to the user who'll run barectl.
+    BarectlConfig(BarectlConfigArgs),
 }
 
 #[derive(Args)]
@@ -115,6 +118,35 @@ struct IssueArgs {
     days: i64,
 }
 
+#[derive(Args)]
+struct BarectlConfigArgs {
+    /// Directory containing ca.pem (only the CA's public certificate is
+    /// read; unlike `issue`, this command never touches ca-key.pem).
+    #[arg(long)]
+    ca_dir: PathBuf,
+
+    /// Path to the already-issued client certificate (PEM), e.g. from
+    /// `issue --role cli`.
+    #[arg(long)]
+    cert: PathBuf,
+
+    /// Path to that certificate's private key (PEM).
+    #[arg(long)]
+    key: PathBuf,
+
+    /// Address of the API server that barectl should connect to.
+    #[arg(long)]
+    server: String,
+
+    /// Expected server name/CN on the API server's certificate.
+    #[arg(long, default_value = "api")]
+    tls_server_name: String,
+
+    /// Write the config to this file instead of printing it to stdout.
+    #[arg(long)]
+    out: Option<PathBuf>,
+}
+
 /// Validates `DNS:<name>` / `IP:<addr>` and returns the bare name/address.
 /// `CertificateParams::new` classifies plain strings as `IpAddress` or
 /// `DnsName` on its own, so the prefix only needs to be checked here, not
@@ -142,6 +174,7 @@ fn main() -> Result<()> {
     match cli.command {
         Command::InitCa(args) => init_ca(args),
         Command::Issue(args) => issue(args),
+        Command::BarectlConfig(args) => barectl_config(args),
     }
 }
 
@@ -271,6 +304,40 @@ fn issue(args: IssueArgs) -> Result<()> {
     Ok(())
 }
 
+/// Packages an already-issued certificate/key pair, plus the CA's public
+/// certificate, into a `barectl` config file. Only reads `ca.pem`, never
+/// `ca-key.pem` -- packaging a config for a user needs no more trust than
+/// the user's own leaf certificate already carries.
+fn barectl_config(args: BarectlConfigArgs) -> Result<()> {
+    let config = barectl_config::FileConfig {
+        server: args.server,
+        tls_server_name: Some(args.tls_server_name),
+        certificate_authority_data: Some(
+            barectl_config::read_and_encode(&args.ca_dir.join("ca.pem"))
+                .context("reading CA certificate")?,
+        ),
+        client_certificate_data: Some(
+            barectl_config::read_and_encode(&args.cert).context("reading client certificate")?,
+        ),
+        client_key_data: Some(
+            barectl_config::read_and_encode(&args.key).context("reading client key")?,
+        ),
+    };
+
+    match args.out {
+        Some(path) => {
+            barectl_config::save(&path, &config).context("writing barectl config")?;
+            println!("wrote {}", path.display());
+        }
+        None => print!(
+            "{}",
+            barectl_config::to_yaml(&config).context("serializing barectl config")?
+        ),
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,5 +400,64 @@ mod tests {
 
     fn pem_to_der(pem_str: &str) -> Vec<u8> {
         pem::parse(pem_str).unwrap().into_contents()
+    }
+
+    #[test]
+    fn barectl_config_packages_an_issued_cli_cert_into_a_loadable_config() {
+        let ca_dir = tempdir("barectl-config-ca");
+        init_ca(InitCaArgs {
+            out_dir: ca_dir.clone(),
+            common_name: "Test CA".to_string(),
+            days: 3650,
+        })
+        .unwrap();
+
+        let leaf_dir = tempdir("barectl-config-leaf");
+        issue(IssueArgs {
+            ca_dir: ca_dir.clone(),
+            cn: "alice".to_string(),
+            role: Role::Cli,
+            out_dir: leaf_dir.clone(),
+            sans: vec![],
+            days: 397,
+        })
+        .unwrap();
+
+        let out_path = leaf_dir.join("barectl-config.yaml");
+        barectl_config(BarectlConfigArgs {
+            ca_dir: ca_dir.clone(),
+            cert: leaf_dir.join("alice.pem"),
+            key: leaf_dir.join("alice-key.pem"),
+            server: "https://cp.example:50052".to_string(),
+            tls_server_name: "api".to_string(),
+            out: Some(out_path.clone()),
+        })
+        .unwrap();
+
+        let loaded = barectl_config::load(&out_path).unwrap().unwrap();
+        assert_eq!(loaded.server, "https://cp.example:50052");
+        assert_eq!(loaded.tls_server_name.as_deref(), Some("api"));
+
+        use base64::Engine as _;
+        let decode = |field: Option<String>| {
+            base64::engine::general_purpose::STANDARD
+                .decode(field.unwrap())
+                .unwrap()
+        };
+        assert_eq!(
+            decode(loaded.certificate_authority_data),
+            fs::read(ca_dir.join("ca.pem")).unwrap()
+        );
+        assert_eq!(
+            decode(loaded.client_certificate_data),
+            fs::read(leaf_dir.join("alice.pem")).unwrap()
+        );
+        assert_eq!(
+            decode(loaded.client_key_data),
+            fs::read(leaf_dir.join("alice-key.pem")).unwrap()
+        );
+
+        fs::remove_dir_all(&ca_dir).ok();
+        fs::remove_dir_all(&leaf_dir).ok();
     }
 }

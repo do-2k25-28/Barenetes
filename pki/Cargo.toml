@@ -11,10 +11,12 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
+barectl-config = { path = "../barectl-config" }
 clap = { version = "4.6.6", features = ["derive", "env"] }
 rcgen = { version = "0.14", features = ["pem", "x509-parser"] }
 time = "0.3.55"
 
 [dev-dependencies]
+base64 = "0.22"
 pem = "4"
 x509-parser = "0.18"

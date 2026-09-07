@@ -1,36 +1,19 @@
-//! `barectl`'s kubeconfig-style config file: a single-profile YAML file
-//! (default `$HOME/.config/barectl/config`, overridable via
-//! `--barectl-config`/`$BARECTL_CONFIG`) that holds the server address and,
-//! optionally, a client TLS identity already issued by `barenetes-pki`
-//! (base64-embedded, the same way a kubeconfig embeds
-//! `client-certificate-data`). Resolution priority everywhere is CLI flag >
-//! env var > this file > a plaintext default, matching kubectl's flag vs.
-//! current-context precedence.
-use std::fs;
-use std::io::Write;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+//! Resolves `barectl`'s effective server address and TLS material from CLI
+//! flags/env (already merged by `clap`), the config file
+//! (`barectl_config::FileConfig`, default `$HOME/.config/barectl/config`,
+//! overridable via `--barectl-config`/`$BARECTL_CONFIG`), and a plaintext
+//! default -- in that priority order, matching kubectl's flag vs.
+//! current-context precedence. The file format itself lives in the
+//! `barectl-config` crate, shared with `barenetes-pki`'s `barectl-config`
+//! subcommand so the two can never write/read incompatible files.
+use std::path::PathBuf;
 
+pub use barectl_config::{FileConfig, default_path, load, read_and_encode, save};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use proto::tls::TlsArgs;
-use serde::{Deserialize, Serialize};
 
 use crate::error::CliError;
-
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub struct FileConfig {
-    pub server: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tls_server_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub certificate_authority_data: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub client_certificate_data: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub client_key_data: Option<String>,
-}
 
 /// The TLS material `connect()` ends up using, once CLI/env, the config
 /// file and the plaintext default have been resolved into one value.
@@ -51,88 +34,6 @@ pub enum ResolvedTls {
         ca: Vec<u8>,
         server_name: String,
     },
-}
-
-/// `$HOME/.config/barectl/config`, or `None` if `$HOME` isn't set (in which
-/// case the caller falls back to no config file rather than erroring, except
-/// for `config set`/`config view` which need a concrete path to act on).
-pub fn default_path() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config/barectl/config"))
-}
-
-/// Loads the config file at `path`. A missing file is `Ok(None)`, not an
-/// error -- the config file is always optional.
-pub fn load(path: &Path) -> Result<Option<FileConfig>, CliError> {
-    match fs::read_to_string(path) {
-        Ok(contents) => {
-            serde_yaml::from_str(&contents)
-                .map(Some)
-                .map_err(|source| CliError::ParseConfig {
-                    path: path.to_path_buf(),
-                    source,
-                })
-        }
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(source) => Err(CliError::ReadConfig {
-            path: path.to_path_buf(),
-            source,
-        }),
-    }
-}
-
-/// Writes `config` to `path`, replacing whatever was there. Creates the
-/// parent directory (0700) if needed, and writes the file itself at 0600
-/// since it may embed a private key.
-pub fn save(path: &Path, config: &FileConfig) -> Result<(), CliError> {
-    let yaml = serde_yaml::to_string(config).map_err(|source| CliError::SerializeConfig {
-        path: path.to_path_buf(),
-        source,
-    })?;
-
-    if let Some(dir) = path.parent()
-        && !dir.as_os_str().is_empty()
-    {
-        fs::create_dir_all(dir).map_err(|source| CliError::WriteConfig {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).map_err(|source| {
-            CliError::WriteConfig {
-                path: path.to_path_buf(),
-                source,
-            }
-        })?;
-    }
-
-    write_atomic(path, &yaml, 0o600).map_err(|source| CliError::WriteConfig {
-        path: path.to_path_buf(),
-        source,
-    })
-}
-
-/// Writes `contents` to `path` at `mode` without ever exposing a
-/// world/group-readable window, by creating a sibling temp file with the
-/// target mode already set and renaming it into place (same idiom as
-/// `barenetes-pki`'s `write_pem`).
-fn write_atomic(path: &Path, contents: &str, mode: u32) -> std::io::Result<()> {
-    let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let tmp_path = dir.join(format!(
-        ".{}.tmp-{}",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("config"),
-        std::process::id()
-    ));
-
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(mode)
-        .open(&tmp_path)?;
-    file.write_all(contents.as_bytes())?;
-    file.sync_all()?;
-    fs::rename(&tmp_path, path)
 }
 
 /// Resolves the effective server address: CLI flag/env (already merged by
@@ -210,32 +111,9 @@ fn decode(value: &str, field: &'static str) -> Result<Vec<u8>, CliError> {
         .map_err(|source| CliError::DecodeConfig { field, source })
 }
 
-/// Reads `path` and base64-encodes its raw bytes, for embedding into a
-/// [`FileConfig`] by `config set`.
-pub fn read_and_encode(path: &Path) -> Result<String, CliError> {
-    let bytes = fs::read(path).map_err(|source| CliError::ReadTlsFile {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    Ok(BASE64.encode(bytes))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn tempdir(label: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "barectl-config-test-{label}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
 
     fn tls_args(
         cert: Option<&str>,
@@ -259,39 +137,6 @@ mod tests {
             client_certificate_data: Some(BASE64.encode("cert-pem")),
             client_key_data: Some(BASE64.encode("key-pem")),
         }
-    }
-
-    #[test]
-    fn load_returns_none_for_a_missing_file() {
-        let dir = tempdir("missing");
-        assert!(load(&dir.join("config")).unwrap().is_none());
-        fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn save_then_load_round_trips() {
-        let dir = tempdir("roundtrip");
-        let path = dir.join("nested").join("config");
-        let config = file_config_with_tls();
-
-        save(&path, &config).unwrap();
-        let loaded = load(&path).unwrap().unwrap();
-
-        assert_eq!(loaded, config);
-        fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn save_writes_the_file_at_mode_0600() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let dir = tempdir("perms");
-        let path = dir.join("config");
-        save(&path, &file_config_with_tls()).unwrap();
-
-        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600);
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

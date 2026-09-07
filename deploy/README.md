@@ -195,17 +195,39 @@ sudo barenetes-pki issue --ca-dir /etc/barenetes/pki/ca \
   --cn alice --role cli --out-dir /tmp/alice-pki
 ```
 
-Copy `ca.pem` and the two files from `/tmp/alice-pki/` wherever `barectl`
-runs. From there, either pass them on every invocation (or set the matching
-`BARENETES_TLS_*` env vars):
+The fastest way to hand it to the user: package it into a ready-to-use
+`barectl` config file right there on the control plane, and pipe it
+straight into the default location on the machine that will run
+`barectl` (`barectl-config` only reads the CA's public `ca.pem`, never
+`ca-key.pem`):
+
+```sh
+ssh root@<control-plane-ip> barenetes-pki barectl-config \
+  --ca-dir /etc/barenetes/pki/ca \
+  --cert /tmp/alice-pki/alice.pem --key /tmp/alice-pki/alice-key.pem \
+  --server https://<control-plane-ip>:50052 \
+  > ~/.config/barectl/config
+chmod 600 ~/.config/barectl/config
+
+barectl get pods
+```
+
+Omit the `> file` redirection to print the YAML to stdout instead
+(`--out <path>` writes it directly if you're running the command locally
+on the control plane rather than over `ssh`).
+
+If you'd rather not run commands on the control plane over `ssh` and just
+copy the raw PEM files yourself: copy `ca.pem` and the two files from
+`/tmp/alice-pki/` wherever `barectl` runs, then either pass them on every
+invocation (or set the matching `BARENETES_TLS_*` env vars):
 
 ```sh
 barectl --tls-cert alice.pem --tls-key alice-key.pem --tls-ca ca.pem \
   --tls-server-name api https://<control-plane-ip>:50052 get pods
 ```
 
-or embed them once into a config file with `barectl config set`, so later
-invocations need neither the flags nor the env vars:
+or embed them once into a config file locally with `barectl config set`,
+equivalent to what `barenetes-pki barectl-config` produces remotely:
 
 ```sh
 barectl config set --server https://<control-plane-ip>:50052 \
@@ -215,7 +237,7 @@ barectl config set --server https://<control-plane-ip>:50052 \
 barectl get pods
 ```
 
-This writes `$HOME/.config/barectl/config` (override with
+Either way, the result is `$HOME/.config/barectl/config` (override with
 `--barectl-config`/`$BARECTL_CONFIG`), a single-profile YAML file with the
 server address and the TLS material base64-embedded — kubeconfig-style,
 but for one identity, not a multi-cluster context store. `barectl config
