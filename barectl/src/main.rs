@@ -5,7 +5,7 @@ mod commands;
 mod error;
 mod manifest;
 
-use cli::{Cli, Commands, CreateResource, DeleteResource, GetResource};
+use cli::{Cli, Commands, CreateResource, DeleteResource, GetResource, generate_completions};
 
 #[tokio::main]
 async fn main() {
@@ -22,6 +22,13 @@ async fn main() {
         Commands::Delete(args) => match args.resource {
             DeleteResource::Pod(args) => commands::delete_pod(&cli.server, &cli.tls, args).await,
         },
+        Commands::Completion(args) => {
+            match generate_completions(args.shell, &mut std::io::stdout()) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+                Err(error) => Err(error::CliError::WriteOutput(error)),
+            }
+        }
     };
 
     if let Err(err) = result {
