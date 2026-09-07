@@ -22,8 +22,29 @@ pub struct BasicScheduler {
 }
 
 impl BasicScheduler {
-    pub fn upsert_node(&mut self, node: Node) {
+    /// Inserts or replaces `node`'s recorded state. Returns whether this
+    /// change could plausibly unblock a pending pod — a brand-new node, a
+    /// recovery to `Ready`, or an increase in allocatable capacity — so the
+    /// caller can skip a wasted retry sweep for events that can't (a
+    /// same-capacity re-report from an agent reconnect, a status change that
+    /// isn't a recovery, or less capacity than before).
+    pub fn upsert_node(&mut self, node: Node) -> bool {
+        let should_retry = match self.nodes.get(&node.name) {
+            None => true,
+            Some(existing) => {
+                let recovered_to_ready =
+                    node.status() == NodeStatus::Ready && existing.status() != NodeStatus::Ready;
+                let allocatable_increased = match (existing.allocatable, node.allocatable) {
+                    (Some(old), Some(new)) => new.cpu > old.cpu || new.memory > old.memory,
+                    (None, Some(_)) => true,
+                    _ => false,
+                };
+                recovered_to_ready || allocatable_increased
+            }
+        };
+
         self.nodes.insert(node.name.clone(), node);
+        should_retry
     }
 
     /// Drops `name` and its claimed/placement bookkeeping entirely — unlike
@@ -346,6 +367,89 @@ mod tests {
             Some(limits(1000, 1000))
         );
         assert!(!scheduler.release_placement("default", "web"));
+    }
+
+    #[test]
+    fn upsert_node_of_a_new_node_signals_retry() {
+        let mut scheduler = BasicScheduler::default();
+
+        let should_retry =
+            scheduler.upsert_node(get_node("fresh", limits(1000, 1000), limits(1000, 1000)));
+
+        assert!(should_retry, "a brand-new node can unblock pending pods");
+    }
+
+    #[test]
+    fn upsert_node_recovering_to_ready_signals_retry() {
+        let mut scheduler = BasicScheduler::default();
+        let mut not_ready = get_node("n", limits(1000, 1000), limits(1000, 1000));
+        not_ready.status = NodeStatus::NotReady.into();
+        scheduler.upsert_node(not_ready);
+
+        let should_retry =
+            scheduler.upsert_node(get_node("n", limits(1000, 1000), limits(1000, 1000)));
+
+        assert!(
+            should_retry,
+            "a node recovering to Ready can unblock pending pods"
+        );
+    }
+
+    #[test]
+    fn upsert_node_with_increased_allocatable_signals_retry() {
+        let mut scheduler = BasicScheduler::default();
+        scheduler.upsert_node(get_node("n", limits(1000, 1000), limits(200, 200)));
+
+        let should_retry =
+            scheduler.upsert_node(get_node("n", limits(1000, 1000), limits(500, 500)));
+
+        assert!(
+            should_retry,
+            "more allocatable capacity can unblock pending pods"
+        );
+    }
+
+    #[test]
+    fn upsert_node_with_unchanged_allocatable_does_not_signal_retry() {
+        let mut scheduler = BasicScheduler::default();
+        scheduler.upsert_node(get_node("n", limits(1000, 1000), limits(500, 500)));
+
+        let should_retry =
+            scheduler.upsert_node(get_node("n", limits(1000, 1000), limits(500, 500)));
+
+        assert!(
+            !should_retry,
+            "re-reporting identical capacity (e.g. an agent reconnect) cannot unblock anything"
+        );
+    }
+
+    #[test]
+    fn upsert_node_with_decreased_allocatable_does_not_signal_retry() {
+        let mut scheduler = BasicScheduler::default();
+        scheduler.upsert_node(get_node("n", limits(1000, 1000), limits(500, 500)));
+
+        let should_retry =
+            scheduler.upsert_node(get_node("n", limits(1000, 1000), limits(100, 100)));
+
+        assert!(
+            !should_retry,
+            "less allocatable capacity cannot unblock pending pods"
+        );
+    }
+
+    #[test]
+    fn upsert_node_going_not_ready_does_not_signal_retry() {
+        let mut scheduler = BasicScheduler::default();
+        scheduler.upsert_node(get_node("n", limits(1000, 1000), limits(500, 500)));
+
+        let mut not_ready = get_node("n", limits(1000, 1000), limits(500, 500));
+        not_ready.status = NodeStatus::NotReady.into();
+        let should_retry = scheduler.upsert_node(not_ready);
+
+        assert!(
+            !should_retry,
+            "losing readiness cannot unblock pending pods; orphaned pods are rescheduled separately"
+        );
     }
 
     #[test]

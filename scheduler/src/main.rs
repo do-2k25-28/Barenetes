@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -92,11 +93,12 @@ where
     }
 }
 
-/// Keeps the scheduler's node view current and retries any pod that
-/// couldn't be placed before, since a node change (added, more allocatable
-/// capacity, recovered from NOT_READY) is exactly what makes a pending pod
-/// schedulable again. A pod deletion that frees a placement triggers the
-/// same retry from `watch_pods`.
+/// Keeps the scheduler's node view current and retries pending pods only for
+/// node changes that could plausibly unblock one (added, more allocatable
+/// capacity, recovered from NOT_READY — see `BasicScheduler::upsert_node`),
+/// skipping the retry sweep for events that can't (a `Deleted` node, or a
+/// same-or-less-capacity re-report, e.g. from an agent reconnect). A pod
+/// deletion that frees a placement triggers the same retry from `watch_pods`.
 async fn watch_nodes(
     mut client: ApiServerClient<Channel>,
     state: Arc<Mutex<SchedulerState>>,
@@ -108,22 +110,22 @@ async fn watch_nodes(
         let event_type = event.event_type();
         let Some(node) = event.node else { continue };
 
-        let mut guard = state.lock().await;
         if event_type == EventType::Deleted {
-            guard.scheduler.remove_node(&node.name);
-            drop(guard);
-        } else {
-            let node_name = node.name.clone();
-            let is_not_ready = node.status() == NodeStatus::NotReady;
-            guard.scheduler.upsert_node(node);
-            drop(guard);
-
-            if is_not_ready {
-                reschedule_orphaned_pods(&mut client, &state, &node_name).await?;
-            }
+            state.lock().await.scheduler.remove_node(&node.name);
+            continue;
         }
 
-        retry_pending(&mut client, &state).await?;
+        let mut guard = state.lock().await;
+        let node_name = node.name.clone();
+        let is_not_ready = node.status() == NodeStatus::NotReady;
+        let should_retry = guard.scheduler.upsert_node(node);
+        drop(guard);
+
+        if is_not_ready {
+            reschedule_orphaned_pods(&mut client, &state, &node_name).await?;
+        } else if should_retry {
+            retry_pending(&mut client, &state).await;
+        }
     }
 
     Ok(())
@@ -203,10 +205,13 @@ async fn reschedule_one_orphaned_pod(
     try_schedule(client, state, namespace, name, &pod, false).await
 }
 
-async fn retry_pending(
-    client: &mut ApiServerClient<Channel>,
-    state: &Arc<Mutex<SchedulerState>>,
-) -> Result<()> {
+/// Retries every currently-pending pod concurrently rather than one at a
+/// time: `try_schedule` already re-checks each pod is still pending under
+/// `state`'s lock before placing it (see its doc comment), so running the
+/// sweep's RPCs concurrently is safe and just gets pods placed sooner.
+/// Best-effort: one pod failing to (re)schedule must not stop the rest of
+/// the sweep, so failures are logged rather than propagated.
+async fn retry_pending(client: &mut ApiServerClient<Channel>, state: &Arc<Mutex<SchedulerState>>) {
     let retry: Vec<(PodKey, Pod)> = {
         let guard = state.lock().await;
         guard
@@ -216,11 +221,35 @@ async fn retry_pending(
             .collect()
     };
 
-    for ((namespace, name), pod) in retry {
-        try_schedule(client, state, &namespace, &name, &pod, true).await?;
+    let tasks = retry.into_iter().map(|((namespace, name), pod)| {
+        let mut client = client.clone();
+        let state = state.clone();
+        Box::pin(
+            async move { try_schedule(&mut client, &state, &namespace, &name, &pod, true).await },
+        ) as Pin<Box<dyn Future<Output = Result<()>> + Send>>
+    });
+
+    run_best_effort(tasks).await;
+}
+
+/// Runs every task to completion concurrently. A task's error is logged, not
+/// propagated, so one failure can't cancel the others via `JoinSet`'s usual
+/// "abort the rest" behavior on drop.
+async fn run_best_effort(
+    tasks: impl IntoIterator<Item = Pin<Box<dyn Future<Output = Result<()>> + Send>>>,
+) {
+    let mut set = tokio::task::JoinSet::new();
+    for task in tasks {
+        set.spawn(task);
     }
 
-    Ok(())
+    while let Some(result) = set.join_next().await {
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => println!("retry_pending: a pod retry failed: {err:#}"),
+            Err(join_err) => println!("retry_pending: a pod retry task panicked: {join_err}"),
+        }
+    }
 }
 
 /// Schedules pods as they show up pending, and drops any that get deleted
@@ -259,7 +288,7 @@ async fn watch_pods(
             // pending pod; a deleted pod that was itself pending changes
             // nothing worth retrying for.
             if released {
-                retry_pending(&mut client, &state).await?;
+                retry_pending(&mut client, &state).await;
             }
             continue;
         }
@@ -418,6 +447,27 @@ mod tests {
         fn drop(&mut self) {
             self.0.store(true, Ordering::SeqCst);
         }
+    }
+
+    #[tokio::test]
+    async fn run_best_effort_runs_every_task_even_after_one_fails() {
+        let second_ran = Arc::new(AtomicBool::new(false));
+        let second_ran_clone = second_ran.clone();
+
+        run_best_effort(vec![
+            Box::pin(async { Err(anyhow::anyhow!("boom")) })
+                as std::pin::Pin<Box<dyn Future<Output = Result<()>> + Send>>,
+            Box::pin(async move {
+                second_ran_clone.store(true, Ordering::SeqCst);
+                Ok(())
+            }),
+        ])
+        .await;
+
+        assert!(
+            second_ran.load(Ordering::SeqCst),
+            "a failed task must not stop the other tasks in the same sweep from running"
+        );
     }
 
     #[tokio::test]
