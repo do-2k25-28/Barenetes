@@ -383,6 +383,11 @@ fn container_id(pod: &str, container: &str) -> String {
 /// Transfer API does no such expansion: it hands the raw reference to Go's
 /// `url` parser, which mistakes the `:tag` on an unqualified name for a
 /// `host:port` and fails with `invalid port ... after host`.
+///
+/// Also defaults a reference with neither tag nor digest to `:latest`, the
+/// other half of Docker's short-name convention: without it, containerd's
+/// Transfer API has no tag or digest to resolve against and fails with
+/// `failed to resolve image: object required`.
 fn normalize_reference(image: &str) -> String {
     let first_segment = image.split('/').next().unwrap_or(image);
     let has_registry_host = image.contains('/')
@@ -390,12 +395,21 @@ fn normalize_reference(image: &str) -> String {
             || first_segment.contains('.')
             || first_segment.contains(':'));
 
-    if has_registry_host {
+    let qualified = if has_registry_host {
         image.to_string()
     } else if image.contains('/') {
         format!("docker.io/{image}")
     } else {
         format!("docker.io/library/{image}")
+    };
+
+    let last_segment = qualified.rsplit('/').next().unwrap_or(&qualified);
+    let has_tag_or_digest = last_segment.contains('@') || last_segment.contains(':');
+
+    if has_tag_or_digest {
+        qualified
+    } else {
+        format!("{qualified}:latest")
     }
 }
 
@@ -457,8 +471,35 @@ mod tests {
     }
 
     #[test]
-    fn normalize_reference_qualifies_a_bare_name_without_a_tag() {
-        assert_eq!(normalize_reference("nginx"), "docker.io/library/nginx");
+    fn normalize_reference_defaults_a_bare_name_without_a_tag_to_latest() {
+        assert_eq!(
+            normalize_reference("nginx"),
+            "docker.io/library/nginx:latest"
+        );
+    }
+
+    #[test]
+    fn normalize_reference_defaults_a_namespaced_image_without_a_tag_to_latest() {
+        assert_eq!(
+            normalize_reference("fluent/fluent-bit"),
+            "docker.io/fluent/fluent-bit:latest"
+        );
+    }
+
+    #[test]
+    fn normalize_reference_defaults_an_explicit_registry_host_without_a_tag_to_latest() {
+        assert_eq!(
+            normalize_reference("ghcr.io/foo/bar"),
+            "ghcr.io/foo/bar:latest"
+        );
+    }
+
+    #[test]
+    fn normalize_reference_defaults_a_host_with_a_port_and_no_tag_to_latest() {
+        assert_eq!(
+            normalize_reference("localhost:5000/foo"),
+            "localhost:5000/foo:latest"
+        );
     }
 
     #[test]
