@@ -197,8 +197,7 @@ pub async fn get_pod(server: &str, tls: &ResolvedTls, args: GetPodArgs) -> Resul
 
     pods.sort_by(|a, b| (pod_namespace(a), pod_name(a)).cmp(&(pod_namespace(b), pod_name(b))));
 
-    println!(
-        "{:<15} {:<12} {:<16} {:<15} {:<15} {:<8} {:<8} {:<9} {:<9} {:<20} IMAGE",
+    let headers = [
         "NAME",
         "NAMESPACE",
         "STATUS",
@@ -208,32 +207,35 @@ pub async fn get_pod(server: &str, tls: &ResolvedTls, args: GetPodArgs) -> Resul
         "CPU-LIM",
         "MEM-REQ",
         "MEM-LIM",
-        "PORTS"
-    );
-    for pod in &pods {
-        let images = pod_containers(pod)
-            .iter()
-            .map(|c| c.image.as_str())
-            .collect::<Vec<_>>()
-            .join(",");
-        let status = format!("{:?}", pod_status(pod));
-        let requests = pod_requests(pod);
-        let limits = pod_limits(pod);
-        println!(
-            "{:<15} {:<12} {:<16} {:<15} {:<15} {:<8} {:<8} {:<9} {:<9} {:<20} {}",
-            pod_name(pod),
-            pod_namespace(pod),
-            status,
-            or_none(&pod.node_name),
-            pod_ip(pod),
-            fmt_resource_quantity(requests.map(|r| r.cpu), "m"),
-            fmt_resource_quantity(limits.map(|r| r.cpu), "m"),
-            fmt_resource_quantity(requests.map(|r| r.memory), "MB"),
-            fmt_resource_quantity(limits.map(|r| r.memory), "MB"),
-            pod_ports(pod),
-            images
-        );
-    }
+        "PORTS",
+        "IMAGE",
+    ];
+    let rows = pods
+        .iter()
+        .map(|pod| {
+            let images = pod_containers(pod)
+                .iter()
+                .map(|c| c.image.as_str())
+                .collect::<Vec<_>>()
+                .join(",");
+            let requests = pod_requests(pod);
+            let limits = pod_limits(pod);
+            vec![
+                pod_name(pod).to_string(),
+                pod_namespace(pod).to_string(),
+                format!("{:?}", pod_status(pod)),
+                or_none(&pod.node_name).to_string(),
+                pod_ip(pod).to_string(),
+                fmt_resource_quantity(requests.map(|r| r.cpu), "m"),
+                fmt_resource_quantity(limits.map(|r| r.cpu), "m"),
+                fmt_resource_quantity(requests.map(|r| r.memory), "MB"),
+                fmt_resource_quantity(limits.map(|r| r.memory), "MB"),
+                pod_ports(pod),
+                images,
+            ]
+        })
+        .collect::<Vec<_>>();
+    print_table(&headers, &rows);
 
     Ok(())
 }
@@ -350,25 +352,33 @@ async fn list_nodes(mut client: ApiServerClient<Channel>) -> Result<(), CliError
     let mut nodes = nodes;
     nodes.sort_by(|a, b| a.name.cmp(&b.name));
 
-    println!(
-        "{:<20} {:<12} {:<15} {:<10} {:<10} {:<10} {:<10}",
-        "NAME", "STATUS", "NODE-IP", "CPU-CAP", "CPU-ALLOC", "MEM-CAP", "MEM-ALLOC"
-    );
-    for node in &nodes {
-        let status = NodeStatus::try_from(node.status).unwrap_or(NodeStatus::NotReady);
-        let capacity = node.capacity.as_ref();
-        let allocatable = node.allocatable.as_ref();
-        println!(
-            "{:<20} {:<12} {:<15} {:<10} {:<10} {:<10} {:<10}",
-            node.name,
-            format!("{:?}", status),
-            or_none(&node.ip),
-            fmt_resource_quantity(capacity.map(|r| r.cpu), "m"),
-            fmt_resource_quantity(allocatable.map(|r| r.cpu), "m"),
-            fmt_resource_quantity(capacity.map(|r| r.memory), "Mi"),
-            fmt_resource_quantity(allocatable.map(|r| r.memory), "Mi"),
-        );
-    }
+    let headers = [
+        "NAME",
+        "STATUS",
+        "NODE-IP",
+        "CPU-CAP",
+        "CPU-ALLOC",
+        "MEM-CAP",
+        "MEM-ALLOC",
+    ];
+    let rows = nodes
+        .iter()
+        .map(|node| {
+            let status = NodeStatus::try_from(node.status).unwrap_or(NodeStatus::NotReady);
+            let capacity = node.capacity.as_ref();
+            let allocatable = node.allocatable.as_ref();
+            vec![
+                node.name.clone(),
+                format!("{:?}", status),
+                or_none(&node.ip).to_string(),
+                fmt_resource_quantity(capacity.map(|r| r.cpu), "m"),
+                fmt_resource_quantity(allocatable.map(|r| r.cpu), "m"),
+                fmt_resource_quantity(capacity.map(|r| r.memory), "Mi"),
+                fmt_resource_quantity(allocatable.map(|r| r.memory), "Mi"),
+            ]
+        })
+        .collect::<Vec<_>>();
+    print_table(&headers, &rows);
 
     Ok(())
 }
@@ -491,6 +501,50 @@ fn print_pod(pod: &PodDetail) {
 
 fn or_none(value: &str) -> &str {
     if value.is_empty() { "<none>" } else { value }
+}
+
+/// Prints `rows` under `headers` as a left-aligned table. See [`format_table`].
+fn print_table(headers: &[&str], rows: &[Vec<String>]) {
+    for line in format_table(headers, rows) {
+        println!("{line}");
+    }
+}
+
+/// Renders `rows` under `headers` as left-aligned table lines, sizing each
+/// column to its widest cell (header included). A fixed guess per column
+/// misaligns as soon as one row's value is wider than the guess -- e.g. a
+/// pod's full port list or a long status -- so every width here is derived
+/// from the actual data instead.
+fn format_table(headers: &[&str], rows: &[Vec<String>]) -> Vec<String> {
+    let mut widths: Vec<usize> = headers.iter().map(|h| h.chars().count()).collect();
+    for row in rows {
+        for (width, cell) in widths.iter_mut().zip(row) {
+            *width = (*width).max(cell.chars().count());
+        }
+    }
+
+    let format_row = |cells: &[&str]| {
+        let last = cells.len() - 1;
+        cells
+            .iter()
+            .enumerate()
+            .map(|(i, cell)| {
+                if i == last {
+                    cell.to_string()
+                } else {
+                    format!("{cell:<width$}", width = widths[i])
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("  ")
+    };
+
+    std::iter::once(format_row(headers))
+        .chain(rows.iter().map(|row| {
+            let cells: Vec<&str> = row.iter().map(String::as_str).collect();
+            format_row(&cells)
+        }))
+        .collect()
 }
 
 /// Formats a resource quantity for a table column, `-` when the pod/node
@@ -700,6 +754,44 @@ mod tests {
     #[test]
     fn fmt_resource_quantity_shows_dash_when_unset() {
         assert_eq!(fmt_resource_quantity(None, "m"), "-");
+    }
+
+    #[test]
+    fn format_table_pads_every_column_to_its_widest_cell() {
+        let headers = ["NAME", "STATUS"];
+        let rows = vec![
+            vec!["web".to_string(), "Running".to_string()],
+            vec!["a-much-longer-pod-name".to_string(), "Pending".to_string()],
+        ];
+        let lines = format_table(&headers, &rows);
+        assert_eq!(lines[0], "NAME                    STATUS");
+        assert_eq!(lines[1], "web                     Running");
+        assert_eq!(lines[2], "a-much-longer-pod-name  Pending");
+    }
+
+    #[test]
+    fn format_table_keeps_later_columns_aligned_when_an_earlier_cell_overflows_the_header() {
+        // Regression: fixed-width columns (e.g. a `PORTS` cell wider than its
+        // guessed width) used to throw every following column out of
+        // alignment on that row. format_table sizes columns from the data
+        // instead, so a wide PORTS value can't misalign STATUS.
+        let headers = ["NAME", "PORTS", "STATUS"];
+        let rows = vec![
+            vec![
+                "web".to_string(),
+                "80->8080/tcp".to_string(),
+                "Running".to_string(),
+            ],
+            vec![
+                "api".to_string(),
+                "80->8080/tcp,443->8443/tcp,9090->9090/udp".to_string(),
+                "Running".to_string(),
+            ],
+        ];
+        let lines = format_table(&headers, &rows);
+        let status_col = lines[0].find("STATUS").unwrap();
+        assert_eq!(&lines[1][status_col..], "Running");
+        assert_eq!(&lines[2][status_col..], "Running");
     }
 
     #[test]
