@@ -94,8 +94,25 @@ pub fn load_client_tls_config(
     ca: &Path,
     server_name: &str,
 ) -> Result<ClientTlsConfig> {
-    let identity = Identity::from_pem(read_pem(cert)?, read_pem(key)?);
-    let ca_certificate = Certificate::from_pem(read_pem(ca)?);
+    load_client_tls_config_from_bytes(
+        &read_pem(cert)?,
+        &read_pem(key)?,
+        &read_pem(ca)?,
+        server_name,
+    )
+}
+
+/// Same as [`load_client_tls_config`], but takes PEM bytes directly instead
+/// of paths -- for callers whose cert/key/CA don't live in standalone files
+/// on disk (e.g. `barectl` embeds them, base64-encoded, in its config file).
+pub fn load_client_tls_config_from_bytes(
+    cert: &[u8],
+    key: &[u8],
+    ca: &[u8],
+    server_name: &str,
+) -> Result<ClientTlsConfig> {
+    let identity = Identity::from_pem(cert, key);
+    let ca_certificate = Certificate::from_pem(ca);
 
     Ok(ClientTlsConfig::new()
         .identity(identity)
@@ -169,6 +186,31 @@ mod tests {
             .expect("client tls config should build from valid PEMs");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_client_tls_config_from_bytes_accepts_rcgen_generated_pems() {
+        use rcgen::{CertificateParams, KeyPair};
+
+        let ca_key = KeyPair::generate().unwrap();
+        let ca_cert = CertificateParams::new(vec![])
+            .unwrap()
+            .self_signed(&ca_key)
+            .unwrap();
+
+        let leaf_key = KeyPair::generate().unwrap();
+        let leaf_cert = CertificateParams::new(vec!["node-a".to_string()])
+            .unwrap()
+            .self_signed(&leaf_key)
+            .unwrap();
+
+        load_client_tls_config_from_bytes(
+            leaf_cert.pem().as_bytes(),
+            leaf_key.serialize_pem().as_bytes(),
+            ca_cert.pem().as_bytes(),
+            "node-a",
+        )
+        .expect("client tls config should build from valid PEM bytes");
     }
 
     fn tempdir() -> PathBuf {

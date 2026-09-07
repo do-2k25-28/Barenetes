@@ -7,12 +7,18 @@ use proto::tls::TlsArgs;
 #[derive(Parser)]
 #[command(name = "barectl", version, about = "Command-line client for Barenetes")]
 pub struct Cli {
-    /// Address of the API server
-    #[arg(env = "BARENETES_SERVER", default_value = "http://127.0.0.1:50052")]
-    pub server: String,
+    /// Address of the API server. Falls back to the config file's `server`,
+    /// then to http://127.0.0.1:50052, if unset.
+    #[arg(env = "BARENETES_SERVER")]
+    pub server: Option<String>,
 
     #[command(flatten)]
     pub tls: TlsArgs,
+
+    /// Path to the barectl config file. Defaults to
+    /// $HOME/.config/barectl/config.
+    #[arg(long = "barectl-config", env = "BARECTL_CONFIG")]
+    pub config: Option<PathBuf>,
 
     #[command(subcommand)]
     pub command: Commands,
@@ -28,6 +34,50 @@ pub enum Commands {
 
     /// Delete a resource
     Delete(DeleteArgs),
+
+    /// Manage the barectl config file
+    Config(ConfigArgs),
+}
+
+#[derive(Args)]
+pub struct ConfigArgs {
+    #[command(subcommand)]
+    pub action: ConfigAction,
+}
+
+#[derive(Subcommand)]
+pub enum ConfigAction {
+    /// Write the server address and (optionally) a TLS identity to the
+    /// config file, replacing whatever was there
+    Set(ConfigSetArgs),
+
+    /// Show the currently configured server and whether a TLS identity is
+    /// set (never prints certificate or key material)
+    View,
+}
+
+#[derive(Args)]
+pub struct ConfigSetArgs {
+    /// Address of the API server
+    #[arg(long)]
+    pub server: String,
+
+    /// Path to an already-issued client TLS certificate (PEM). Combine with
+    /// --tls-key, --tls-ca and --tls-server-name to embed a TLS identity.
+    #[arg(long = "tls-cert")]
+    pub tls_cert: Option<PathBuf>,
+
+    /// Path to the client TLS private key (PEM).
+    #[arg(long = "tls-key")]
+    pub tls_key: Option<PathBuf>,
+
+    /// Path to the cluster CA certificate (PEM).
+    #[arg(long = "tls-ca")]
+    pub tls_ca: Option<PathBuf>,
+
+    /// Expected server name/CN on the peer certificate.
+    #[arg(long = "tls-server-name")]
+    pub tls_server_name: Option<String>,
 }
 
 #[derive(Args)]

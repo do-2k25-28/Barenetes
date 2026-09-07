@@ -196,14 +196,32 @@ sudo barenetes-pki issue --ca-dir /etc/barenetes/pki/ca \
 ```
 
 Copy `ca.pem` and the two files from `/tmp/alice-pki/` wherever `barectl`
-runs, then pass them on every invocation (or set the matching
+runs. From there, either pass them on every invocation (or set the matching
 `BARENETES_TLS_*` env vars):
 
 ```sh
-barectl --server https://<control-plane-ip>:50052 \
-  --tls-cert alice.pem --tls-key alice-key.pem --tls-ca ca.pem \
-  --tls-server-name api get pods
+barectl --tls-cert alice.pem --tls-key alice-key.pem --tls-ca ca.pem \
+  --tls-server-name api https://<control-plane-ip>:50052 get pods
 ```
+
+or embed them once into a config file with `barectl config set`, so later
+invocations need neither the flags nor the env vars:
+
+```sh
+barectl config set --server https://<control-plane-ip>:50052 \
+  --tls-cert alice.pem --tls-key alice-key.pem --tls-ca ca.pem \
+  --tls-server-name api
+
+barectl get pods
+```
+
+This writes `$HOME/.config/barectl/config` (override with
+`--barectl-config`/`$BARECTL_CONFIG`), a single-profile YAML file with the
+server address and the TLS material base64-embedded — kubeconfig-style,
+but for one identity, not a multi-cluster context store. `barectl config
+view` shows what's currently configured (never the cert/key contents). A
+`--tls-cert`/flag or `BARENETES_TLS_*`/env value, if set, still overrides
+whatever the config file holds.
 
 ## What it doesn't do
 
