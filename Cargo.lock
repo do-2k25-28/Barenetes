@@ -211,6 +211,8 @@ name = "barectl"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "barectl-config",
+ "base64 0.22.1",
  "clap",
  "clap_complete",
  "proto",
@@ -219,6 +221,16 @@ dependencies = [
  "thiserror",
  "tokio",
  "tonic",
+]
+
+[[package]]
+name = "barectl-config"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "serde",
+ "serde_yaml",
+ "thiserror",
 ]
 
 [[package]]
@@ -994,6 +1006,8 @@ name = "pki"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "barectl-config",
+ "base64 0.22.1",
  "clap",
  "pem",
  "rcgen",

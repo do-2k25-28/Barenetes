@@ -36,6 +36,15 @@ pub enum CliError {
 
     #[error("{message}")]
     Server { message: String },
+
+    #[error("{0}")]
+    Config(#[from] barectl_config::Error),
+
+    #[error("could not decode {field} in config: {source}")]
+    DecodeConfig {
+        field: &'static str,
+        source: base64::DecodeError,
+    },
 }
 
 impl From<tonic::Status> for CliError {

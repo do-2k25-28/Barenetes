@@ -1,0 +1,12 @@
+[package]
+name = "barectl-config"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+base64 = "0.22"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_yaml = "0.9"
+thiserror = "2.0"
