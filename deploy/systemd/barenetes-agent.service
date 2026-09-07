@@ -33,7 +33,17 @@ StateDirectoryMode=0750
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ProtectControlGroups=true
+# No ProtectControlGroups: it mounts /sys/fs/cgroup read-only for the unit,
+# and the agent owns the pod cgroups under /sys/fs/cgroup/barenetes, so a pod
+# declaring resource limits would fail to apply with EROFS.
+#
+# Delegate=yes + ProtectControlGroups=private (systemd 257+) would hand the
+# agent a writable cgroup subtree of its own instead, but that subtree belongs
+# to this unit: systemd kills it on stop, so restarting the agent would take
+# every running pod down with it. Pod cgroups have to outlive the agent, which
+# is why they sit at the top of the hierarchy. The private namespace would not 
+# help the containers either: their cgroups are created by runc, from containerd's 
+# mount namespace, against the path we put in the OCI spec.
 RestrictRealtime=true
 LockPersonality=true
 

@@ -70,6 +70,56 @@ cargo run -p agent --example kubelet_cli -- delete default-web
 # deleted: true
 ```
 
+## Resource limits
+
+`kubelet_cli apply` takes optional `--cpu` and `--memory` flags:
+
+```sh
+cargo run -p agent --example kubelet_cli -- apply web docker.io/library/nginx:alpine --cpu 500 --memory 256
+```
+
+`--cpu` is in millicores. 1000 means one full core, 500 means half a core.
+`--memory` is in megabytes. Leave a flag out to leave that resource
+unlimited.
+
+Limits belong to the pod, not to its containers. The agent enforces them on a
+single cgroup per pod, `/sys/fs/cgroup/barenetes/<pod-id>`, and runs every
+container of the pod in its own leaf cgroup underneath it:
+
+```
+/sys/fs/cgroup/barenetes/default.web        <- cpu.max, memory.max live here
+├── default.web-app
+└── default.web-sidecar
+```
+
+The kernel accounts a cgroup for all of its descendants, so the containers of
+the pod share the one budget: a pod limited to 500 mCPU gets half a core in
+total, however many containers it spreads it over.
+
+A CPU limit is written as a quota over a period: the pod gets `quota`
+microseconds of CPU time out of every `period` microseconds. The agent uses a
+100ms period, so the quota is `cpu * 100000 / 1000`. The kernel rejects any
+quota below 1000 microseconds, so limits under 10 millicores are rounded up to
+that instead of failing to start.
+
+A memory limit is written to `memory.max`, with `memory.swap.max` pinned to 0
+so the pod cannot walk around the limit by swapping.
+
+This needs a cgroup v2 hierarchy mounted at `/sys/fs/cgroup`, and an agent
+allowed to write to it. Applying a pod that declares limits on a host without
+one fails; pods without limits get no cgroup of their own.
+
+`apply` failing with `cannot set up the cgroup of <pod>: /sys/fs/cgroup/...:
+Read-only file system` means the agent sees cgroupfs read-only. Either it runs
+under a systemd unit with `ProtectControlGroups=` on (the shipped
+`barenetes-agent.service` deliberately leaves it off), or it runs inside a
+container that mounts `/sys/fs/cgroup` read-only. Check with:
+
+```sh
+findmnt -o TARGET,OPTIONS /sys/fs/cgroup
+sudo cat /proc/$(pgrep -x barenetes-agent)/mountinfo | grep ' /sys/fs/cgroup '
+```
+
 ## Using a generic gRPC client instead of `kubelet_cli`
 
 `kubelet_cli` is only a convenience wrapper, the kubelet exposes a plain gRPC
