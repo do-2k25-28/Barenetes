@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use proto::api::v1::api_server_client::ApiServerClient;
 use proto::api::v1::{
     CreatePodRequest, DeletePodRequest, GetNodeRequest, ListNodesRequest, ListPodsRequest,
@@ -6,36 +8,50 @@ use proto::shared::v1::{
     Container, Node, NodeStatus, Pod, PodDetail, PodSpec, PodStatus, PodWithSpec, Protocol,
     Resources,
 };
-use proto::tls::{TlsArgs, TlsMode, load_client_tls_config, tls_mode};
+use proto::tls::{load_client_tls_config, load_client_tls_config_from_bytes};
 use tonic::transport::Channel;
 
-use crate::cli::{CreatePodArgs, DeletePodArgs, GetNodeArgs, GetPodArgs};
+use crate::cli::{ConfigSetArgs, CreatePodArgs, DeletePodArgs, GetNodeArgs, GetPodArgs};
+use crate::config::{self, FileConfig, ResolvedTls};
 use crate::error::CliError;
 use crate::manifest::PodManifest;
 
 /// Connects to the API server, plaintext or mTLS depending on `tls`. In mTLS mode
-/// `--tls-server-name` must be set, since the certs `barenetes-pki` issues carry no
-/// public DNS name for `tonic` to default the expected server identity to.
-async fn connect(server: &str, tls: &TlsArgs) -> Result<ApiServerClient<Channel>, CliError> {
-    match tls_mode(tls)? {
-        TlsMode::Plaintext => {
-            ApiServerClient::connect(server.to_string())
-                .await
-                .map_err(|source| CliError::Connect {
-                    addr: server.to_string(),
-                    source,
-                })
-        }
-        TlsMode::Mtls { cert, key, ca } => {
-            let server_name = tls.tls_server_name.as_deref().ok_or_else(|| {
-                CliError::InvalidUsage(
-                    "--tls-server-name is required when connecting over mTLS (--tls-cert/--tls-key/--tls-ca set)"
-                        .to_string(),
-                )
-            })?;
+/// the cert/key/CA may come from files on disk (CLI flags/env) or from bytes
+/// already decoded from the config file -- see [`ResolvedTls`].
+async fn connect(server: &str, tls: &ResolvedTls) -> Result<ApiServerClient<Channel>, CliError> {
+    let tls_config = match tls {
+        ResolvedTls::Plaintext => None,
+        ResolvedTls::Paths {
+            cert,
+            key,
+            ca,
+            server_name,
+        } => Some(load_client_tls_config(cert, key, ca, server_name)?),
+        ResolvedTls::Bytes {
+            cert,
+            key,
+            ca,
+            server_name,
+        } => Some(load_client_tls_config_from_bytes(
+            cert,
+            key,
+            ca,
+            server_name,
+        )?),
+    };
+
+    match tls_config {
+        None => ApiServerClient::connect(server.to_string())
+            .await
+            .map_err(|source| CliError::Connect {
+                addr: server.to_string(),
+                source,
+            }),
+        Some(tls_config) => {
             let channel = Channel::from_shared(server.to_string())
                 .map_err(|source| CliError::Tls(source.into()))?
-                .tls_config(load_client_tls_config(&cert, &key, &ca, server_name)?)
+                .tls_config(tls_config)
                 .map_err(|source| CliError::Connect {
                     addr: server.to_string(),
                     source,
@@ -51,7 +67,11 @@ async fn connect(server: &str, tls: &TlsArgs) -> Result<ApiServerClient<Channel>
     }
 }
 
-pub async fn create_pod(server: &str, tls: &TlsArgs, args: CreatePodArgs) -> Result<(), CliError> {
+pub async fn create_pod(
+    server: &str,
+    tls: &ResolvedTls,
+    args: CreatePodArgs,
+) -> Result<(), CliError> {
     let pod = build_pod(args)?;
     require_limits(&pod)?;
     let name = pod.pod.as_ref().map(|p| p.name.clone()).unwrap_or_default();
@@ -152,7 +172,7 @@ fn resources(cpu: Option<i32>, memory: Option<i32>) -> Result<Option<Resources>,
     }
 }
 
-pub async fn get_pod(server: &str, tls: &TlsArgs, args: GetPodArgs) -> Result<(), CliError> {
+pub async fn get_pod(server: &str, tls: &ResolvedTls, args: GetPodArgs) -> Result<(), CliError> {
     let mut client = connect(server, tls).await?;
 
     let response = client.list_pods(ListPodsRequest {}).await?;
@@ -346,7 +366,11 @@ fn matches_filters(pod: &PodDetail, args: &GetPodArgs) -> bool {
     true
 }
 
-pub async fn delete_pod(server: &str, tls: &TlsArgs, args: DeletePodArgs) -> Result<(), CliError> {
+pub async fn delete_pod(
+    server: &str,
+    tls: &ResolvedTls,
+    args: DeletePodArgs,
+) -> Result<(), CliError> {
     let mut client = connect(server, tls).await?;
 
     client
@@ -449,6 +473,75 @@ fn protocol_str(protocol: i32) -> &'static str {
         Ok(Protocol::Udp) => "udp",
         Err(_) => "unknown",
     }
+}
+
+/// Writes `args` to the config file at `config_path`, replacing whatever
+/// was there. Reads the given PEM files from local disk and embeds them
+/// base64-encoded -- `config set` never talks to the network or generates
+/// any key material itself, it only packages certs already issued by
+/// `barenetes-pki`.
+pub fn config_set(config_path: &Path, args: ConfigSetArgs) -> Result<(), CliError> {
+    let tls_data = match (&args.tls_cert, &args.tls_key, &args.tls_ca) {
+        (Some(cert), Some(key), Some(ca)) => {
+            if args.tls_server_name.is_none() {
+                return Err(CliError::InvalidUsage(
+                    "--tls-server-name is required when --tls-cert/--tls-key/--tls-ca are set"
+                        .to_string(),
+                ));
+            }
+            Some((
+                config::read_and_encode(ca)?,
+                config::read_and_encode(cert)?,
+                config::read_and_encode(key)?,
+            ))
+        }
+        (None, None, None) => None,
+        _ => {
+            return Err(CliError::InvalidUsage(
+                "--tls-cert, --tls-key and --tls-ca must all be set together or all omitted"
+                    .to_string(),
+            ));
+        }
+    };
+
+    let file_config = FileConfig {
+        server: args.server,
+        tls_server_name: args.tls_server_name,
+        certificate_authority_data: tls_data.as_ref().map(|(ca, _, _)| ca.clone()),
+        client_certificate_data: tls_data.as_ref().map(|(_, cert, _)| cert.clone()),
+        client_key_data: tls_data.as_ref().map(|(_, _, key)| key.clone()),
+    };
+
+    config::save(config_path, &file_config)?;
+    println!("wrote {}", config_path.display());
+    Ok(())
+}
+
+/// Prints the currently configured server and whether a TLS identity is
+/// set. Never prints certificate or key material.
+pub fn config_view(config_path: &Path) -> Result<(), CliError> {
+    let file_config = config::load(config_path)?;
+    print!("{}", format_view(config_path, file_config.as_ref()));
+    Ok(())
+}
+
+fn format_view(config_path: &Path, file_config: Option<&FileConfig>) -> String {
+    let Some(config) = file_config else {
+        return format!("No config file at {}.\n", config_path.display());
+    };
+
+    let tls = if config.client_certificate_data.is_some() {
+        "configured"
+    } else {
+        "not configured (plaintext)"
+    };
+    format!(
+        "Config file:      {}\nServer:           {}\nTLS server name:  {}\nTLS:              {}\n",
+        config_path.display(),
+        config.server,
+        config.tls_server_name.as_deref().unwrap_or("<none>"),
+        tls
+    )
 }
 
 #[cfg(test)]
@@ -571,5 +664,129 @@ mod tests {
     #[test]
     fn fmt_resource_quantity_shows_dash_when_unset() {
         assert_eq!(fmt_resource_quantity(None, "m"), "-");
+    #[test]
+    fn format_view_reports_no_file_when_absent() {
+        let path = std::path::PathBuf::from("/tmp/does-not-exist/config");
+        assert_eq!(
+            format_view(&path, None),
+            "No config file at /tmp/does-not-exist/config.\n"
+        );
+    }
+
+    #[test]
+    fn format_view_shows_plaintext_when_no_tls_data() {
+        let path = std::path::PathBuf::from("/tmp/config");
+        let config = FileConfig {
+            server: "http://127.0.0.1:50052".to_string(),
+            ..Default::default()
+        };
+        let view = format_view(&path, Some(&config));
+        assert!(view.contains("Server:           http://127.0.0.1:50052"));
+        assert!(view.contains("TLS:              not configured (plaintext)"));
+        assert!(view.contains("TLS server name:  <none>"));
+    }
+
+    #[test]
+    fn format_view_shows_configured_when_tls_data_present() {
+        let path = std::path::PathBuf::from("/tmp/config");
+        let config = FileConfig {
+            server: "https://cp:50052".to_string(),
+            tls_server_name: Some("api".to_string()),
+            certificate_authority_data: Some("ca".to_string()),
+            client_certificate_data: Some("cert".to_string()),
+            client_key_data: Some("key".to_string()),
+        };
+        let view = format_view(&path, Some(&config));
+        assert!(view.contains("TLS:              configured"));
+        assert!(view.contains("TLS server name:  api"));
+    }
+
+    fn tempdir(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "barectl-commands-test-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn config_set_writes_a_plaintext_config() {
+        let dir = tempdir("set-plaintext");
+        let config_path = dir.join("config");
+
+        config_set(
+            &config_path,
+            ConfigSetArgs {
+                server: "http://127.0.0.1:50052".to_string(),
+                tls_cert: None,
+                tls_key: None,
+                tls_ca: None,
+                tls_server_name: None,
+            },
+        )
+        .unwrap();
+
+        let loaded = config::load(&config_path).unwrap().unwrap();
+        assert_eq!(loaded.server, "http://127.0.0.1:50052");
+        assert!(loaded.client_certificate_data.is_none());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_set_embeds_the_given_pem_files() {
+        let dir = tempdir("set-tls");
+        let config_path = dir.join("config");
+        std::fs::write(dir.join("cert.pem"), "cert-contents").unwrap();
+        std::fs::write(dir.join("key.pem"), "key-contents").unwrap();
+        std::fs::write(dir.join("ca.pem"), "ca-contents").unwrap();
+
+        config_set(
+            &config_path,
+            ConfigSetArgs {
+                server: "https://cp:50052".to_string(),
+                tls_cert: Some(dir.join("cert.pem")),
+                tls_key: Some(dir.join("key.pem")),
+                tls_ca: Some(dir.join("ca.pem")),
+                tls_server_name: Some("api".to_string()),
+            },
+        )
+        .unwrap();
+
+        let loaded = config::load(&config_path).unwrap().unwrap();
+        use base64::Engine as _;
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(loaded.client_certificate_data.unwrap())
+                .unwrap(),
+            b"cert-contents"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_set_rejects_partial_tls_flags() {
+        let dir = tempdir("set-partial");
+        let config_path = dir.join("config");
+
+        let result = config_set(
+            &config_path,
+            ConfigSetArgs {
+                server: "https://cp:50052".to_string(),
+                tls_cert: Some(dir.join("cert.pem")),
+                tls_key: None,
+                tls_ca: None,
+                tls_server_name: None,
+            },
+        );
+
+        assert!(result.is_err());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

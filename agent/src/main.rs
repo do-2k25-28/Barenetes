@@ -4,6 +4,7 @@ use proto::agent::v1::kubelet_server::KubeletServer;
 use proto::tls::{TlsArgs, TlsMode, load_server_tls_config, tls_mode};
 use tonic::transport::Server;
 
+mod cgroup;
 mod cni;
 mod containerd;
 mod desired_state;

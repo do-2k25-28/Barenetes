@@ -7,6 +7,7 @@ use proto::cni::v1::{NetworkRef, WorkloadRef};
 use proto::tls_identity::Role;
 use tonic::{Request, Response, Status};
 
+use crate::cgroup;
 use crate::cni::Cni;
 use crate::containerd::Containerd;
 use crate::vlan::VlanAllocations;
@@ -86,6 +87,10 @@ impl KubeletService {
             })
             .ok();
 
+        if let Err(error) = cgroup::remove_pod(pod_id) {
+            eprintln!("agent: failed to roll back the cgroup of {pod_id}: {error}");
+        }
+
         // The pod is gone entirely, so its VLAN can be reused later.
         if let Err(error) = self.vlans.release(pod_id) {
             eprintln!("agent: failed to release VLAN of {pod_id}: {error}");
@@ -147,11 +152,15 @@ impl Kubelet for KubeletService {
             .pod
             .ok_or_else(|| Status::invalid_argument("missing pod"))?;
         let spec = pod.spec.unwrap_or_default();
-        let pod_name = pod
-            .pod
-            .map(|p| p.name)
-            .filter(|name| !name.is_empty())
-            .ok_or_else(|| Status::invalid_argument("missing pod name"))?;
+        let core = pod.pod.unwrap_or_default();
+        if core.name.is_empty() {
+            return Err(Status::invalid_argument("missing pod name"));
+        }
+        let pod_name = core.name;
+        // Limits are declared for the whole pod and enforced on the pod cgroup
+        // every container of the pod runs under, so the containers share one
+        // budget rather than each getting a full copy of it.
+        let limits = core.limits;
 
         // Container names end up in the container ids, so they must be set and unique
         let mut names = HashSet::new();
@@ -193,9 +202,20 @@ impl Kubelet for KubeletService {
             .remove_pod(&pod_id, DEFAULT_GRACE_PERIOD, true)
             .await?;
 
-        let outcome = self
-            .create_containers(&spec.containers, &pod_id, namespace, vlan)
-            .await;
+        let outcome = async {
+            // The pod is recreated from scratch, and so is its cgroup: a
+            // re-apply must not keep enforcing the limits of the last one.
+            if let Err(error) = cgroup::remove_pod(&pod_id) {
+                eprintln!("agent: failed to clear the cgroup of {pod_id}: {error}");
+            }
+            cgroup::create_pod(&pod_id, limits.as_ref()).map_err(|error| {
+                Status::internal(format!("cannot set up the cgroup of {pod_id}: {error}"))
+            })?;
+
+            self.create_containers(&spec.containers, &pod_id, namespace, vlan)
+                .await
+        }
+        .await;
         if outcome.is_err() {
             self.rollback(&pod_id, namespace, &spec.containers, vlan)
                 .await;
@@ -257,6 +277,13 @@ impl Kubelet for KubeletService {
         self.containerd
             .remove_pod(&request.pod_id, grace_period, request.force)
             .await?;
+
+        if let Err(error) = cgroup::remove_pod(&request.pod_id) {
+            eprintln!(
+                "agent: failed to remove the cgroup of {}: {error}",
+                request.pod_id
+            );
+        }
 
         // The pod is gone, so its VLAN can be reused by a future pod.
         if let Err(error) = self.vlans.release(&request.pod_id) {

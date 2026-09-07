@@ -28,11 +28,23 @@ pub enum CliError {
         source: serde_yaml::Error,
     },
 
+    #[error("could not write command output: {0}")]
+    WriteOutput(#[source] std::io::Error),
+
     #[error("{0}")]
     InvalidUsage(String),
 
     #[error("{message}")]
     Server { message: String },
+
+    #[error("{0}")]
+    Config(#[from] barectl_config::Error),
+
+    #[error("could not decode {field} in config: {source}")]
+    DecodeConfig {
+        field: &'static str,
+        source: base64::DecodeError,
+    },
 }
 
 impl From<tonic::Status> for CliError {

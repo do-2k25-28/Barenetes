@@ -1,18 +1,25 @@
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap_complete::{Shell, generate};
 use proto::shared::v1::{EnvVar, Port, Protocol};
 use proto::tls::TlsArgs;
 
 #[derive(Parser)]
 #[command(name = "barectl", version, about = "Command-line client for Barenetes")]
 pub struct Cli {
-    /// Address of the API server
-    #[arg(env = "BARENETES_SERVER", default_value = "http://127.0.0.1:50052")]
-    pub server: String,
+    /// Address of the API server. Falls back to the config file's `server`,
+    /// then to http://127.0.0.1:50052, if unset.
+    #[arg(short = 's', long, env = "BARENETES_SERVER", global = true)]
+    pub server: Option<String>,
 
     #[command(flatten)]
     pub tls: TlsArgs,
+
+    /// Path to the barectl config file. Defaults to
+    /// $HOME/.config/barectl/config.
+    #[arg(long = "barectl-config", env = "BARECTL_CONFIG")]
+    pub config: Option<PathBuf>,
 
     #[command(subcommand)]
     pub command: Commands,
@@ -28,6 +35,53 @@ pub enum Commands {
 
     /// Delete a resource
     Delete(DeleteArgs),
+
+    /// Manage the barectl config file
+    Config(ConfigArgs),
+
+    /// Generate shell completion code
+    Completion(CompletionArgs),
+}
+
+#[derive(Args)]
+pub struct ConfigArgs {
+    #[command(subcommand)]
+    pub action: ConfigAction,
+}
+
+#[derive(Subcommand)]
+pub enum ConfigAction {
+    /// Write the server address and (optionally) a TLS identity to the
+    /// config file, replacing whatever was there
+    Set(ConfigSetArgs),
+
+    /// Show the currently configured server and whether a TLS identity is
+    /// set (never prints certificate or key material)
+    View,
+}
+
+#[derive(Args)]
+pub struct ConfigSetArgs {
+    /// Address of the API server
+    #[arg(long)]
+    pub server: String,
+
+    /// Path to an already-issued client TLS certificate (PEM). Combine with
+    /// --tls-key, --tls-ca and --tls-server-name to embed a TLS identity.
+    #[arg(long = "tls-cert")]
+    pub tls_cert: Option<PathBuf>,
+
+    /// Path to the client TLS private key (PEM).
+    #[arg(long = "tls-key")]
+    pub tls_key: Option<PathBuf>,
+
+    /// Path to the cluster CA certificate (PEM).
+    #[arg(long = "tls-ca")]
+    pub tls_ca: Option<PathBuf>,
+
+    /// Expected server name/CN on the peer certificate.
+    #[arg(long = "tls-server-name")]
+    pub tls_server_name: Option<String>,
 }
 
 #[derive(Args)]
@@ -39,6 +93,7 @@ pub struct CreateArgs {
 #[derive(Subcommand)]
 pub enum CreateResource {
     /// Create a pod
+    #[command(visible_aliases = ["pods", "po"])]
     Pod(CreatePodArgs),
 }
 
@@ -50,10 +105,12 @@ pub struct GetArgs {
 
 #[derive(Subcommand)]
 pub enum GetResource {
-    /// List pods validating filters
+    /// Display one or many pods
+    #[command(visible_aliases = ["pods", "po"])]
     Pod(GetPodArgs),
 
-    /// Fetch all nodes / one node by name
+    /// Display one or many nodes
+    #[command(visible_aliases = ["nodes", "no"])]
     Node(GetNodeArgs),
 }
 
@@ -65,8 +122,26 @@ pub struct DeleteArgs {
 
 #[derive(Subcommand)]
 pub enum DeleteResource {
-    /// Delete a pod by name and optional namespace
+    /// Delete a pod
+    #[command(visible_aliases = ["pods", "po"])]
     Pod(DeletePodArgs),
+}
+
+#[derive(Args)]
+pub struct CompletionArgs {
+    /// Shell for which to generate completion code
+    #[arg(value_enum)]
+    pub shell: Shell,
+}
+
+pub fn generate_completions(
+    shell: Shell,
+    writer: &mut dyn std::io::Write,
+) -> Result<(), std::io::Error> {
+    let mut command = Cli::command();
+    let mut output = Vec::new();
+    generate(shell, &mut command, "barectl", &mut output);
+    writer.write_all(&output)
 }
 
 #[derive(Args)]
@@ -78,7 +153,7 @@ pub struct CreatePodArgs {
     /// Pod name (also used as the container name); required unless --file is used
     pub name: Option<String>,
 
-    /// Namespace to create the pod in (default "default"); ignored with --file
+    /// Namespace to create the pod in; cannot be combined with --file
     #[arg(short, long)]
     pub namespace: Option<String>,
 
@@ -113,21 +188,21 @@ pub struct CreatePodArgs {
 
 #[derive(Args)]
 pub struct GetPodArgs {
-    /// Filter over pod name ; if only 1 is returned, display details
+    /// Pod name; if omitted, list pods
     pub name: Option<String>,
 
-    /// Filter over namespace ; combine with pod name to always have 0 or 1 result
+    /// Filter by namespace
     #[arg(long, short)]
     pub namespace: Option<String>,
 
-    /// Filter over container image
+    /// Filter by container image
     #[arg(long, short)]
     pub image: Option<String>,
 }
 
 #[derive(Args)]
 pub struct GetNodeArgs {
-    /// Name of a specific node for details
+    /// Name of a specific node
     pub name: Option<String>,
 }
 
@@ -136,7 +211,7 @@ pub struct DeletePodArgs {
     /// Pod name
     pub name: String,
 
-    /// Pod namespace, optional
+    /// Pod namespace
     #[arg(long, short, default_value = "default")]
     pub namespace: String,
 }
@@ -173,4 +248,91 @@ fn parse_env(raw: &str) -> Result<EnvVar, String> {
         name: name.to_string(),
         value: value.to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_resource_names_and_aliases() {
+        for resource in ["pod", "pods", "po"] {
+            let cli = Cli::try_parse_from(["barectl", "get", resource]).unwrap();
+            assert!(matches!(
+                cli.command,
+                Commands::Get(GetArgs {
+                    resource: GetResource::Pod(_)
+                })
+            ));
+        }
+
+        for resource in ["node", "nodes", "no"] {
+            let cli = Cli::try_parse_from(["barectl", "get", resource]).unwrap();
+            assert!(matches!(
+                cli.command,
+                Commands::Get(GetArgs {
+                    resource: GetResource::Node(_)
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn parses_create_and_delete_commands() {
+        for resource in ["pod", "pods", "po"] {
+            let create =
+                Cli::try_parse_from(["barectl", "create", resource, "-f", "pod.yaml"]).unwrap();
+            assert!(matches!(
+                create.command,
+                Commands::Create(CreateArgs {
+                    resource: CreateResource::Pod(_)
+                })
+            ));
+
+            let delete = Cli::try_parse_from(["barectl", "delete", resource, "web"]).unwrap();
+            assert!(matches!(
+                delete.command,
+                Commands::Delete(DeleteArgs {
+                    resource: DeleteResource::Pod(_)
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn parses_and_generates_shell_completions() {
+        let cli = Cli::try_parse_from(["barectl", "completion", "zsh"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Completion(CompletionArgs { shell: Shell::Zsh })
+        ));
+
+        for shell in [
+            Shell::Bash,
+            Shell::Elvish,
+            Shell::Fish,
+            Shell::PowerShell,
+            Shell::Zsh,
+        ] {
+            let mut output = Vec::new();
+            generate_completions(shell, &mut output).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains("barectl"));
+            assert!(output.contains("get"));
+            assert!(output.contains("pod"));
+        }
+    }
+
+    #[test]
+    fn server_is_a_global_option() {
+        let cli = Cli::try_parse_from([
+            "barectl",
+            "get",
+            "nodes",
+            "--server",
+            "http://api.example:50052",
+        ])
+        .unwrap();
+        assert_eq!(cli.server.as_deref(), Some("http://api.example:50052"));
+    }
 }
