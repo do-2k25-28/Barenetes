@@ -73,6 +73,7 @@ pub async fn create_pod(
     args: CreatePodArgs,
 ) -> Result<(), CliError> {
     let pod = build_pod(args)?;
+    require_limits(&pod)?;
     let name = pod.pod.as_ref().map(|p| p.name.clone()).unwrap_or_default();
     let namespace = pod
         .spec
@@ -138,6 +139,29 @@ fn build_pod(args: CreatePodArgs) -> Result<PodWithSpec, CliError> {
     })
 }
 
+/// The scheduler refuses to place any pod without `resources.limits`
+/// (`scheduler::schedulers::basic::place`), leaving it stuck `NoNodeAvailable`
+/// forever with no further feedback. Catch it here instead, before ever
+/// reaching the API server, with a message that says how to fix it from
+/// either creation path (flags or manifest).
+fn require_limits(pod: &PodWithSpec) -> Result<(), CliError> {
+    let has_limits = pod.pod.as_ref().is_some_and(|p| p.limits.is_some());
+    if has_limits {
+        return Ok(());
+    }
+
+    let name = pod.pod.as_ref().map(|p| p.name.as_str()).unwrap_or("");
+    Err(CliError::InvalidUsage(format!(
+        "pod \"{name}\" is missing resources.limits; the scheduler will never place it without one.\n  \
+         Flags:    add --cpu-limit <milli-cpu> --memory-limit <MB>, e.g. --cpu-limit 250 --memory-limit 128\n  \
+         Manifest: add a resources.limits block, e.g.\n              \
+         resources:\n                \
+         limits:\n                  \
+         cpu: 250\n                  \
+         memory: 128"
+    )))
+}
+
 fn resources(cpu: Option<i32>, memory: Option<i32>) -> Result<Option<Resources>, CliError> {
     match (cpu, memory) {
         (None, None) => Ok(None),
@@ -174,8 +198,8 @@ pub async fn get_pod(server: &str, tls: &ResolvedTls, args: GetPodArgs) -> Resul
     pods.sort_by(|a, b| (pod_namespace(a), pod_name(a)).cmp(&(pod_namespace(b), pod_name(b))));
 
     println!(
-        "{:<15} {:<12} {:<16} {:<15} IMAGE",
-        "NAME", "NAMESPACE", "STATUS", "NODE"
+        "{:<15} {:<12} {:<16} {:<15} {:<8} {:<8} {:<9} {:<9} IMAGE",
+        "NAME", "NAMESPACE", "STATUS", "NODE", "CPU-REQ", "CPU-LIM", "MEM-REQ", "MEM-LIM"
     );
     for pod in &pods {
         let images = pod_containers(pod)
@@ -184,12 +208,18 @@ pub async fn get_pod(server: &str, tls: &ResolvedTls, args: GetPodArgs) -> Resul
             .collect::<Vec<_>>()
             .join(",");
         let status = format!("{:?}", pod_status(pod));
+        let requests = pod_requests(pod);
+        let limits = pod_limits(pod);
         println!(
-            "{:<15} {:<12} {:<16} {:<15} {}",
+            "{:<15} {:<12} {:<16} {:<15} {:<8} {:<8} {:<9} {:<9} {}",
             pod_name(pod),
             pod_namespace(pod),
             status,
             or_none(&pod.node_name),
+            fmt_resource_quantity(requests.map(|r| r.cpu), "m"),
+            fmt_resource_quantity(limits.map(|r| r.cpu), "m"),
+            fmt_resource_quantity(requests.map(|r| r.memory), "MB"),
+            fmt_resource_quantity(limits.map(|r| r.memory), "MB"),
             images
         );
     }
@@ -227,6 +257,20 @@ fn pod_containers(pod: &PodDetail) -> &[Container] {
         .and_then(|c| c.spec.as_ref())
         .map(|s| s.containers.as_slice())
         .unwrap_or_default()
+}
+
+fn pod_requests(pod: &PodDetail) -> Option<&Resources> {
+    pod.core
+        .as_ref()
+        .and_then(|c| c.pod.as_ref())
+        .and_then(|p| p.requests.as_ref())
+}
+
+fn pod_limits(pod: &PodDetail) -> Option<&Resources> {
+    pod.core
+        .as_ref()
+        .and_then(|c| c.pod.as_ref())
+        .and_then(|p| p.limits.as_ref())
 }
 
 pub async fn get_node(server: &str, tls: &ResolvedTls, args: GetNodeArgs) -> Result<(), CliError> {
@@ -268,19 +312,21 @@ async fn list_nodes(mut client: ApiServerClient<Channel>) -> Result<(), CliError
     nodes.sort_by(|a, b| a.name.cmp(&b.name));
 
     println!(
-        "{:<20} {:<12} {:<12} {:<12}",
-        "NAME", "STATUS", "CPU", "MEMORY"
+        "{:<20} {:<12} {:<10} {:<10} {:<10} {:<10}",
+        "NAME", "STATUS", "CPU-CAP", "CPU-ALLOC", "MEM-CAP", "MEM-ALLOC"
     );
     for node in &nodes {
         let status = NodeStatus::try_from(node.status).unwrap_or(NodeStatus::NotReady);
-        let cpu = node.capacity.as_ref().map_or(0, |r| r.cpu);
-        let mem = node.capacity.as_ref().map_or(0, |r| r.memory);
+        let capacity = node.capacity.as_ref();
+        let allocatable = node.allocatable.as_ref();
         println!(
-            "{:<20} {:<12} {:<12} {:<12}",
+            "{:<20} {:<12} {:<10} {:<10} {:<10} {:<10}",
             node.name,
             format!("{:?}", status),
-            format!("{}m", cpu),
-            format!("{}Mi", mem),
+            fmt_resource_quantity(capacity.map(|r| r.cpu), "m"),
+            fmt_resource_quantity(allocatable.map(|r| r.cpu), "m"),
+            fmt_resource_quantity(capacity.map(|r| r.memory), "Mi"),
+            fmt_resource_quantity(allocatable.map(|r| r.memory), "Mi"),
         );
     }
 
@@ -357,16 +403,8 @@ fn print_pod(pod: &PodDetail) {
     println!("Node:        {}", or_none(&pod.node_name));
     println!("Pod IP:      {pod_ip}");
 
-    let requests = pod
-        .core
-        .as_ref()
-        .and_then(|c| c.pod.as_ref())
-        .and_then(|p| p.requests.as_ref());
-    let limits = pod
-        .core
-        .as_ref()
-        .and_then(|c| c.pod.as_ref())
-        .and_then(|p| p.limits.as_ref());
+    let requests = pod_requests(pod);
+    let limits = pod_limits(pod);
     if requests.is_some() || limits.is_some() {
         println!();
         if let Some(requests) = requests {
@@ -417,6 +455,16 @@ fn print_pod(pod: &PodDetail) {
 
 fn or_none(value: &str) -> &str {
     if value.is_empty() { "<none>" } else { value }
+}
+
+/// Formats a resource quantity for a table column, `-` when the pod/node
+/// never reported one (e.g. a pod with only `requests`, or a node
+/// `NotReady` since boot with no capacity report yet).
+fn fmt_resource_quantity(value: Option<i32>, unit: &str) -> String {
+    match value {
+        Some(v) => format!("{v}{unit}"),
+        None => "-".to_string(),
+    }
 }
 
 fn protocol_str(protocol: i32) -> &'static str {
@@ -552,6 +600,70 @@ mod tests {
         let pod = pod_detail("default", "web", "nginx:alpine");
         assert!(matches_filters(&pod, &args(None, Some("default"), None)));
         assert!(!matches_filters(&pod, &args(None, Some("other"), None)));
+    }
+
+    fn pod_with_spec(
+        name: &str,
+        requests: Option<Resources>,
+        limits: Option<Resources>,
+    ) -> PodWithSpec {
+        PodWithSpec {
+            pod: Some(Pod {
+                name: name.to_string(),
+                status: PodStatus::Pending as i32,
+                requests,
+                limits,
+            }),
+            spec: Some(PodSpec {
+                namespace: "default".to_string(),
+                containers: vec![],
+            }),
+        }
+    }
+
+    #[test]
+    fn require_limits_accepts_a_pod_with_limits() {
+        let pod = pod_with_spec(
+            "web",
+            None,
+            Some(Resources {
+                cpu: 250,
+                memory: 128,
+            }),
+        );
+        assert!(require_limits(&pod).is_ok());
+    }
+
+    #[test]
+    fn require_limits_rejects_a_pod_without_limits() {
+        let pod = pod_with_spec(
+            "web",
+            Some(Resources {
+                cpu: 100,
+                memory: 64,
+            }),
+            None,
+        );
+        let err = require_limits(&pod).unwrap_err().to_string();
+        assert!(err.contains("web"), "error should name the pod: {err}");
+        assert!(
+            err.contains("--cpu-limit") && err.contains("--memory-limit"),
+            "error should explain the flags to add: {err}"
+        );
+        assert!(
+            err.contains("resources.limits"),
+            "error should explain the manifest field to add: {err}"
+        );
+    }
+
+    #[test]
+    fn fmt_resource_quantity_formats_a_present_value() {
+        assert_eq!(fmt_resource_quantity(Some(250), "m"), "250m");
+    }
+
+    #[test]
+    fn fmt_resource_quantity_shows_dash_when_unset() {
+        assert_eq!(fmt_resource_quantity(None, "m"), "-");
     }
 
     #[test]
